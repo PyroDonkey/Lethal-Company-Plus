@@ -1,4 +1,4 @@
-# Lethal Company Plus Installer
+# Lethal Company Plus
 
 This script provides a streamlined way to install a curated mod pack for Lethal Company, focusing on bug fixes, quality-of-life improvements, and compatibility with vanilla players. It simplifies the process by automating the download, installation, and configuration of all included mods, including BepInExPack.  It's ideal for distributing a pre-defined set of mods to players, ensuring everyone has the same tested configuration for a polished and enhanced Lethal Company experience.
 
