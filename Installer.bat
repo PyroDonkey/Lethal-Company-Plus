@@ -81,7 +81,6 @@ set "MOD_LIST=!MOD_LIST!AccurateStaminaDisplay,ButteryStancakes;"
 set "MOD_LIST=!MOD_LIST!LethalRichPresence,mrov;"
 set "MOD_LIST=!MOD_LIST!AlwaysHearActiveWalkies,Suskitech;"
 set "MOD_LIST=!MOD_LIST!ShipLoot,tinyhoot;"
-set "MOD_LIST=!MOD_LIST!CompatibilityChecker,Ryokune;"
 set "MOD_LIST=!MOD_LIST!RuntimeIcons,LethalCompanyModding;"
 
 :: Calculate mod count
