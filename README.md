@@ -34,7 +34,7 @@ A simple, self-installing modpack for Lethal Company that focuses on quality of 
 * RuntimeIcons
 
 ## Installation
-1. Download `LCPlus-Installer.bat` from the [Releases](https://github.com/LethalCompanyModding/LCPlus-Installer/releases) page
+1. Download `LCPlus-Installer.bat` from the [Releases]([link](https://github.com/PyroDonkey/Lethal-Company-Plus/releases)) page
 2. Run as administrator
 3. Follow the prompts
 4. Play!
