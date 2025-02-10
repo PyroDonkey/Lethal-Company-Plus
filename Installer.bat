@@ -22,6 +22,10 @@ set "CYAN="
 set "WHITE="
 set "RESET="
 
+:: Add version variables here
+set "VERSION=1.1.0"
+set "LAST_MODIFIED=2025-02-10"
+
 :: ANSI color support variables
 set "ANSI_SUPPORT=0"
 set "COLOR_ENABLED=0"
@@ -80,27 +84,44 @@ set "ModList=!ModList!CompatibilityChecker,Ryokune;"
 set "MOD_COUNT=0"
 for %%a in ("%ModList:;=";"%") do set /a "MOD_COUNT+=1"
 
-:: Check if already elevated
-if "%1"=="ELEVATED" goto :CONTINUE
-
-:: Check for admin privileges
-NET FILE 1>NUL 2>NUL
-if '%errorlevel%' == '0' (
-    goto :START_INSTALLATION
+:: Check admin privileges using WHOAMI
+:CheckElevation
+WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
+if %errorlevel% equ 0 (
+    goto :ContinueInitialization
 ) else (
-    call :Log "Requesting administrator privileges..." "console"
-    goto :ELEVATE
+    call :RequestElevation
+    exit /b
 )
 
-:ELEVATE
-echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-echo UAC.ShellExecute "%~f0", "ELEVATED", "", "runas", 1 >> "%temp%\getadmin.vbs"
-"%temp%\getadmin.vbs"
-timeout /t 2 >nul
-if exist "%temp%\getadmin.vbs" del "%temp%\getadmin.vbs"
-exit /B
+:RequestElevation
+if not exist "%TEMP_DIR%" (
+    mkdir "%TEMP_DIR%" || (
+        echo Failed to create temp directory: "%TEMP_DIR%"
+        pause
+        exit /b 1
+    )
+)
+if not exist "%LOG_DIR%" (
+    mkdir "%LOG_DIR%" || (
+        echo Failed to create log directory: "%LOG_DIR%"
+        pause
+        exit /b 1
+    )
+)
+echo Requesting administrator privileges...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {Start-Process '%~f0' -Verb RunAs}"
+exit /b
 
-:CONTINUE
+:ContinueInitialization
+:: Initialize log file after elevation
+echo [%date% %time%] Lethal Company Plus installation started > "%LOG_FILE%"
+echo [%date% %time%] Initializing installer... >> "%LOG_FILE%"
+
+:: Log version information silently
+call :Log "LCPlus Installer Version: v%VERSION%"
+call :Log "Batch Script Last Modified: %LAST_MODIFIED%"
+
 :: Initialize installation status and paths
 set "INSTALL_STATUS=0"
 set "TEMP_DIR=%TEMP%\LCPlusInstall"
@@ -129,10 +150,6 @@ if not exist "%EXTRACT_DIR%" (
         exit /b 1
     )
 )
-
-:: Initialize log file
-echo [%date% %time%] Lethal Company Plus installation started > "%LOG_FILE%"
-echo [%date% %time%] Initializing installer... >> "%LOG_FILE%"
 
 :: Enable ANSI support and set up colors
 reg add "HKCU\Software\Microsoft\Command Processor" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
@@ -185,12 +202,10 @@ goto :START_INSTALLATION
 :: Globals Modified: LOG_FILE
 :: Error Codes: Always returns 0
 :Log
-setlocal EnableDelayedExpansion
 set "MESSAGE=%~1"
 set "CONSOLE=%~2"
 echo [%date% %time%] !MESSAGE! >> "!LOG_FILE!"
 if "!CONSOLE!"=="console" echo !MESSAGE!
-endlocal
 exit /b 0
 
 :: Colored output function
@@ -219,7 +234,8 @@ exit /b 0
 ::   1 - Missing requirements (PS version, disk space, etc.)
 :InitializeEnvironment
 setlocal EnableDelayedExpansion
-call :Log "Checking environment requirements..." "console"
+call :ColorEcho BLUE "► Initializing environment..."
+call :Log "Checking environment requirements..."
 
 :: Configure UTF-8 code page
 chcp 65001 >nul
@@ -251,7 +267,7 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
-call :Log "Environment check completed successfully" "console"
+call :Log "Environment check completed successfully"
 endlocal
 exit /b 0
 
@@ -266,67 +282,63 @@ exit /b 0
 ::   1 - Game not found
 :LocateGame
 setlocal EnableDelayedExpansion
-call :ColorEcho WHITE "⚙ Locating Lethal Company installation..."
-call :Log "Searching for Lethal Company installation..."
+call :Log "Starting game location detection..." "console"
+call :ColorEcho BLUE "► Locating Lethal Company installation..."
 
-:: Check default Steam locations
-if exist "C:\Program Files (x86)\Steam\steamapps\common\Lethal Company" (
-    set "FOUND_PATH=C:\Program Files (x86)\Steam\steamapps\common\Lethal Company"
-    goto :GAME_FOUND
-)
-
-:: Search Steam registry with improved error handling
-powershell -Command "$ErrorActionPreference = 'SilentlyContinue'; $steamPath = Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'SteamPath' | Select-Object -ExpandProperty 'SteamPath'; if ($steamPath) { $steamPath.Replace('/', '\') } else { exit 1 }" > "!TEMP_DIR!\steam_path.txt" 2>nul
-
-if !errorlevel! neq 0 (
-    call :HandleError "Could not read Steam path from registry" 2
-    goto :LocateGame_End
-)
-
-set /p STEAM_PATH=<"!TEMP_DIR!\steam_path.txt"
-del "!TEMP_DIR!\steam_path.txt" 2>nul
-
-if defined STEAM_PATH (
-    if exist "!STEAM_PATH!\steamapps\libraryfolders.vdf" (
-        :: Use PowerShell to parse Steam library folders
-        powershell -Command "$content = Get-Content '!STEAM_PATH!\steamapps\libraryfolders.vdf'; $paths = $content | Select-String '^\s*\"path\"\s*\"([^\"]+)\"' | ForEach-Object { $_.Matches.Groups[1].Value }; $paths | ForEach-Object { $_ }" > "!TEMP_DIR!\steam_libraries.txt" 2>nul
-
-        for /f "usebackq delims=" %%i in ("!TEMP_DIR!\steam_libraries.txt") do (
-            if exist "%%i\steamapps\common\Lethal Company" (
-                set "FOUND_PATH=%%i\steamapps\common\Lethal Company"
-                del "!TEMP_DIR!\steam_libraries.txt" 2>nul
-                goto :GAME_FOUND
+:: Check registry locations with proper quoting
+for %%A in (
+    "HKCU\Software\Valve\Steam"
+    "HKLM\Software\Valve\Steam"
+    "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 1966720"
+) do (
+    call :Log "Checking registry: %%~A"
+    reg query "%%~A" /v "InstallLocation" 2>nul | findstr /I /C:"InstallLocation" >nul && (
+        for /f "tokens=2,*" %%B in ('reg query "%%~A" /v "InstallLocation" 2^>nul') do (
+            set "STEAM_PATH=%%C"
+            call :Log "Found Steam path: !STEAM_PATH!"
+            if exist "!STEAM_PATH!\Lethal Company.exe" (
+                set "FOUND_PATH=!STEAM_PATH!"
+                goto :ValidateGamePath
             )
         )
-        del "!TEMP_DIR!\steam_libraries.txt" 2>nul
-    )
-
-    if exist "!STEAM_PATH!\steamapps\common\Lethal Company" (
-        set "FOUND_PATH=!STEAM_PATH!\steamapps\common\Lethal Company"
-        goto :GAME_FOUND
+    ) || (
+        call :Log "Registry entry not found: %%~A"
     )
 )
 
-call :Log "ERROR: Lethal Company installation not found" "console"
-call :ColorEcho RED "ERROR: Lethal Company installation not found"
-call :ColorEcho YELLOW "Please ensure the game is installed through Steam"
-goto :LocateGame_End
-
-:GAME_FOUND
-call :Log "Found game at: !FOUND_PATH!" "console"
-call :ColorEcho GREEN "✓ Found game at: !FOUND_PATH!"
-echo.
-
-:: User confirmation of the found path
-set /p "CONFIRM=Is this the correct location? [Y/N] " || set "CONFIRM=Y"
-if /i not "!CONFIRM!"=="Y" (
-    call :Log "User declined found game location" "console"
-    call :HandleError "Installation cancelled by user" 3
-    goto :LocateGame_End
+:: Search all Steam library folders
+if defined STEAM_PATH (
+    if exist "!STEAM_PATH!\steamapps\libraryfolders.vdf" (
+        powershell -Command "$content = Get-Content '^!STEAM_PATH!\steamapps\libraryfolders.vdf'; $paths = $content | Select-String '^\s*\"path\"\s*\"([^\"]+)\"' | %%{ $_.Matches.Groups[1].Value }; $paths | %%{ if (Test-Path -LiteralPath \"$_\\steamapps\\common\\Lethal Company\") { \"$_\\steamapps\\common\\Lethal Company\" } }" > "!TEMP_DIR!\steam_libs.txt"
+        
+        for /f "usebackq delims=" %%i in ("!TEMP_DIR!\steam_libs.txt") do (
+            if exist "%%i\Lethal Company.exe" (
+                set "FOUND_PATH=%%i"
+                goto :ValidateGamePath
+            )
+        )
+        del "!TEMP_DIR!\steam_libs.txt" 2>nul
+    )
 )
-echo.
 
-:LocateGame_End
+:: Manual input with validation loop
+:ManualInput
+call :ColorEcho YELLOW "Could not auto-detect installation."
+echo.
+echo Enter your Lethal Company path (containing Lethal Company.exe):
+set /p "FOUND_PATH=Path: "
+if not defined FOUND_PATH goto :ManualInput
+
+:ValidateGamePath
+set "FOUND_PATH=!FOUND_PATH:"=!"
+if "!FOUND_PATH:~-1!"=="\" set "FOUND_PATH=!FOUND_PATH:~0,-1!"
+if not exist "!FOUND_PATH!\Lethal Company.exe" (
+    call :Log "Invalid path: !FOUND_PATH!"
+    echo Invalid path. Lethal Company.exe not found.
+    goto :ManualInput
+)
+call :ColorEcho GREEN "✓ Lethal Company install located at: !FOUND_PATH!"
+call :Log "Valid game path found: !FOUND_PATH!" "console"
 endlocal & set "FOUND_PATH=%FOUND_PATH%"
 exit /b 0
 
@@ -997,20 +1009,55 @@ exit /b 0
 ::==================================
 :START_INSTALLATION
 call :InitializeEnvironment
-if !errorlevel! neq 0 goto :ERROR
+if %errorlevel% neq 0 goto :ERROR
 
 call :LocateGame
-if !errorlevel! neq 0 goto :ERROR
+if %errorlevel% neq 0 goto :ERROR
+
+:: Show mod list and get confirmation BEFORE any installation
+call :ShowModListAndConfirm
+if %errorlevel% neq 0 goto :ERROR
 
 :: Install BepInEx first
 call :InstallBepInExPack
-if !errorlevel! neq 0 goto :ERROR
+if %errorlevel% neq 0 goto :ERROR
 
 :: Then install all other mods
 call :InstallComponents
-if !errorlevel! neq 0 goto :ERROR
+if %errorlevel% neq 0 goto :ERROR
 
 goto :CLEANUP
+
+:ShowModListAndConfirm
+call :Log "Displaying mod list to user..."
+call :ColorEcho CYAN "The following will be installed:"
+echo.
+call :ColorEcho WHITE "  - BepInExPack (Core Mod Loader) by BepInEx"
+
+:: Log mod list display
+call :Log "Displayed BepInExPack in mod list"
+
+for %%a in ("%ModList:;=";"%") do (
+    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+        if /i not "%%b"=="BepInExPack" (
+            call :ColorEcho WHITE "  - %%b by %%c"
+            call :Log "Displayed mod in list: %%b by %%c"
+        )
+    )
+)
+
+echo.
+call :ColorEcho YELLOW "This will install %MOD_COUNT% mods including BepInEx."
+call :ColorEcho YELLOW "Press Enter to continue or Ctrl+C to cancel..."
+set /p "CONTINUE= "
+call :Log "User confirmed installation" "console"
+exit /b 0
+
+:InstallOtherMods
+setlocal EnableDelayedExpansion
+call :Log "Starting mod installation process..." "console"
+
+:: Rest of installation logic remains unchanged...
 
 ::==================================
 :: Error Handling and Cleanup
@@ -1020,7 +1067,7 @@ goto :CLEANUP
 :ERROR
 setlocal EnableDelayedExpansion
 echo.
-call :ColorEcho RED "Installation failed!"
+call :ColorEcho RED "X Installation failed!"
 echo.
 call :ColorEcho YELLOW "Troubleshooting steps:"
 echo • Check the logs at: !LOG_DIR!
@@ -1090,7 +1137,7 @@ if not defined ERROR_CODE set "ERROR_CODE=1"
 
 :: Log error with timestamp
 call :Log "ERROR [!ERROR_CODE!]: !ERROR_MESSAGE!" "console"
-call :ColorEcho RED "ERROR [!ERROR_CODE!]: !ERROR_MESSAGE!"
+call :ColorEcho RED "X ERROR [!ERROR_CODE!]: !ERROR_MESSAGE!"
 
 :: Append log file contents if provided
 if defined ERROR_LOG (
