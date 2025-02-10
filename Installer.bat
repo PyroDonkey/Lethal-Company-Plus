@@ -51,6 +51,10 @@ set "RESTORE="
 set "ERROR_MESSAGE="
 set "ERROR_CODE="
 
+:: Add to initialization section
+set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
+set "INSTALL_STATUS=0"
+
 :: =================================
 :: Mod List Definition
 :: =================================
@@ -188,7 +192,174 @@ if !errorlevel! neq 0 (
     powershell Set-ExecutionPolicy RemoteSigned -Scope Process >nul 2>&1
 )
 
-goto :START_INSTALLATION
+::==================================
+:: Corrected Main Installation Flow
+::==================================
+:START_INSTALLATION
+call :InitializeEnvironment
+if %errorlevel% neq 0 goto :ERROR
+
+call :LocateGame
+if %errorlevel% neq 0 goto :ERROR
+
+:: Single confirmation point
+call :ShowModListAndConfirm
+if not exist "!CONFIRMATION_FILE!" (
+    call :Log "Installation cancelled by user" "console"
+    call :ColorEcho YELLOW "Installation cancelled"
+    set "INSTALL_STATUS=3"
+    goto :CLEANUP
+)
+
+:: Install all components sequentially
+call :InstallBepInExPack || (
+    set "INSTALL_STATUS=1"
+    goto :ERROR
+)
+
+call :InstallAllMods || (
+    set "INSTALL_STATUS=2"
+    goto :ERROR
+)
+
+goto :CLEANUP
+
+::==================================
+:: Updated Mod Installation Function
+::==================================
+:InstallAllMods
+setlocal EnableDelayedExpansion
+call :ColorEcho BLUE "► Beginning mod installation..."
+echo.
+call :ColorEcho WHITE "Installing %MOD_COUNT% mods..."
+
+for %%a in ("%ModList:;=";"%") do (
+    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+        if /i not "%%b"=="BepInExPack" (
+            call :InstallSingleMod "%%c" "%%b"
+        )
+    )
+)
+endlocal
+exit /b 0
+
+::==================================
+:: Single Mod Installation Function
+::==================================
+:InstallSingleMod
+setlocal EnableDelayedExpansion
+set "MOD_AUTHOR=%~1"
+set "MOD_NAME=%~2"
+
+call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!" "console"
+call :ColorEcho BLUE "► Installing !MOD_NAME!..."
+
+:: Maintain Thunderstore's API structure: package/author/name/
+set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
+call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
+
+:: Fetch mod info with improved error handling and JSON depth
+powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get; $jsonResponse = $response | ConvertTo-Json -Depth 10; $jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json' -Encoding UTF8; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
+
+if !errorlevel! neq 0 (
+    call :HandleError "Failed to fetch mod info for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_api_error.log"
+    endlocal
+    exit /b 1
+)
+
+:: Parse version and URL using findstr
+for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "VERSION=%%a"
+for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
+
+:: Trim whitespace from parsed values
+set "VERSION=!VERSION: =!"
+set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
+
+if not defined VERSION (
+    call :Log "ERROR: Failed to parse version from API response" "console"
+    call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
+    endlocal
+    exit /b 1
+)
+
+if not defined DOWNLOAD_URL (
+    call :Log "ERROR: Failed to parse download URL from API response" "console"
+    call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
+    endlocal
+    exit /b 1
+)
+
+:: Clean up temporary files
+del "!TEMP_DIR!\!MOD_NAME!_response.json" 2>nul
+del "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>nul
+
+:: Setup paths with logging
+set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!VERSION!.zip"
+set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
+
+:: Download mod files
+call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
+if !errorlevel! neq 0 (
+    endlocal
+    exit /b 1
+)
+
+:: Extract and install
+call :ExtractAndInstallMod "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
+if !errorlevel! neq 0 (
+    endlocal
+    exit /b 1
+)
+
+:: Write version information (This MUST happen BEFORE endlocal)
+call :WriteVersionInfo "!MOD_NAME!" "!VERSION!"
+if !errorlevel! neq 0 (
+    endlocal
+    exit /b 1
+)
+
+call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!VERSION!"
+endlocal
+exit /b 0
+
+::==================================
+:: Updated ShowModListAndConfirm
+:: =================================
+:ShowModListAndConfirm
+setlocal EnableDelayedExpansion
+del "!CONFIRMATION_FILE!" 2>nul
+
+:: Display mod list
+call :ColorEcho CYAN "The following will be installed:"
+echo.
+call :ColorEcho WHITE "  - BepInExPack (Core Mod Loader) by BepInEx"
+
+for %%a in ("%ModList:;=";"%") do (
+    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+        if /i not "%%b"=="BepInExPack" (
+            call :ColorEcho WHITE "  - %%b by %%c"
+        )
+    )
+)
+
+:: Get explicit confirmation
+:CONFIRM_LOOP
+echo.
+call :ColorEcho YELLOW "Install %MOD_COUNT% mods? (Y/N)"
+set /p "USER_INPUT= "
+set "USER_INPUT=!USER_INPUT: =!"
+
+if /i "!USER_INPUT!"=="Y" (
+    echo CONFIRMED > "!CONFIRMATION_FILE!"
+    endlocal
+    exit /b 0
+) else if /i "!USER_INPUT!"=="N" (
+    endlocal
+    exit /b 1
+) else (
+    call :ColorEcho RED "Invalid input. Please enter Y or N."
+    goto :CONFIRM_LOOP
+)
 
 ::==================================
 :: Helper Functions (with documentation)
@@ -775,7 +946,7 @@ set "MOD_NAME=%~2"
 call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!" "console"
 call :ColorEcho BLUE "► Installing !MOD_NAME!..."
 
-:: Construct API URL with proper escaping
+:: Corrected API URL with proper name/author order
 set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
 call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
 
@@ -1005,67 +1176,14 @@ endlocal
 exit /b 0
 
 ::==================================
-:: Main Entry Point
-::==================================
-:START_INSTALLATION
-call :InitializeEnvironment
-if %errorlevel% neq 0 goto :ERROR
-
-call :LocateGame
-if %errorlevel% neq 0 goto :ERROR
-
-:: Show mod list and get confirmation BEFORE any installation
-call :ShowModListAndConfirm
-if %errorlevel% neq 0 goto :ERROR
-
-:: Install BepInEx first
-call :InstallBepInExPack
-if %errorlevel% neq 0 goto :ERROR
-
-:: Then install all other mods
-call :InstallComponents
-if %errorlevel% neq 0 goto :ERROR
-
-goto :CLEANUP
-
-:ShowModListAndConfirm
-call :Log "Displaying mod list to user..."
-call :ColorEcho CYAN "The following will be installed:"
-echo.
-call :ColorEcho WHITE "  - BepInExPack (Core Mod Loader) by BepInEx"
-
-:: Log mod list display
-call :Log "Displayed BepInExPack in mod list"
-
-for %%a in ("%ModList:;=";"%") do (
-    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
-        if /i not "%%b"=="BepInExPack" (
-            call :ColorEcho WHITE "  - %%b by %%c"
-            call :Log "Displayed mod in list: %%b by %%c"
-        )
-    )
-)
-
-echo.
-call :ColorEcho YELLOW "This will install %MOD_COUNT% mods including BepInEx."
-call :ColorEcho YELLOW "Press Enter to continue or Ctrl+C to cancel..."
-set /p "CONTINUE= "
-call :Log "User confirmed installation" "console"
-exit /b 0
-
-:InstallOtherMods
-setlocal EnableDelayedExpansion
-call :Log "Starting mod installation process..." "console"
-
-:: Rest of installation logic remains unchanged...
-
-::==================================
 :: Error Handling and Cleanup
 ::==================================
 
 :: 17. Error handling function
 :ERROR
 setlocal EnableDelayedExpansion
+if "!INSTALL_STATUS!" equ "3" goto :CLEANUP
+
 echo.
 call :ColorEcho RED "X Installation failed!"
 echo.
@@ -1078,18 +1196,6 @@ echo • Verify your game files through Steam
 echo.
 call :ColorEcho YELLOW "If the problem persists, please report this issue"
 call :ColorEcho YELLOW "by creating a GitHub issue with the log files."
-
-:: Attempt to restore backup
-if defined BACKUP_DIR (
-    if exist "!BACKUP_DIR!\BepInEx" (
-        echo.
-        call :ColorEcho YELLOW "Would you like to restore the backup? [Y/N]"
-        set /p "RESTORE="
-        if /i "!RESTORE!"=="Y" (
-            call :RestoreBackup
-        )
-    )
-)
 endlocal
 goto :CLEANUP
 
@@ -1107,6 +1213,15 @@ del /f /q "!TEMP_DIR!\*.zip" 2>nul
 :: Remove API response files
 del /f /q "!TEMP_DIR!\*_api.txt" 2>nul
 del /f /q "!TEMP_DIR!\*_response.json" 2>nul
+
+:: Remove confirmation file
+if exist "!CONFIRMATION_FILE!" (
+    del "!CONFIRMATION_FILE!" && (
+        call :Log "Cleaned up confirmation file"
+    ) || (
+        call :Log "WARNING: Failed to delete confirmation file" "console"
+    )
+)
 
 endlocal
 
