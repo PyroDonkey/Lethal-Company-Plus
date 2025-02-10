@@ -23,7 +23,7 @@ set "WHITE="
 set "RESET="
 
 :: Add version variables here
-set "VERSION=1.1.0"
+set "VERSION=1.2.0"
 set "LAST_MODIFIED=2025-02-10"
 
 :: ANSI color support variables
@@ -51,50 +51,56 @@ set "RESTORE="
 set "ERROR_MESSAGE="
 set "ERROR_CODE="
 
+:: Add to initialization section
+set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
+set "INSTALL_STATUS=0"
+
 :: =================================
-:: Mod List Definition
+:: MOD LIST DEFINITION
 :: =================================
 
-:: Mod list (now a single string)
 :: Format: ModName,Author;ModName,Author;...
-set "ModList="
-set "ModList=!ModList!BepInExPack,BepInEx;"
-set "ModList=!ModList!LethalConfig,AinaVT;"
-set "ModList=!ModList!VertexLibrary,LethalCompanyModding;"
-set "ModList=!ModList!GeneralImprovements,ShaosilGaming;"
-set "ModList=!ModList!EnemySoundFixes,ButteryStancakes;"
-set "ModList=!ModList!BarberFixes,ButteryStancakes;"
-set "ModList=!ModList!JetpackFixes,ButteryStancakes;"
-set "ModList=!ModList!MeleeFixes,ButteryStancakes;"
-set "ModList=!ModList!WeedKillerFixes,ButteryStancakes;"
-set "ModList=!ModList!CullFactory,fumiko;"
-set "ModList=!ModList!HideChat,Monkeytype;"
-set "ModList=!ModList!FixRPCLag,Bobbie;"
-set "ModList=!ModList!MoonPriceDisplay,Gloveman23;"
-set "ModList=!ModList!RankFix,Glitch;"
-set "ModList=!ModList!CoilHeadStare,TwinDimensionalProductions;"
-set "ModList=!ModList!NilsHUD,Nilaier;"
-set "ModList=!ModList!AccurateStaminaDisplay,ButteryStancakes;"
-set "ModList=!ModList!LethalRichPresence,mrov;"
-set "ModList=!ModList!AlwaysHearActiveWalkies,Suskitech;"
-set "ModList=!ModList!ShipLoot,tinyhoot;"
-set "ModList=!ModList!CompatibilityChecker,Ryokune;"
+set "MOD_LIST="
+set "MOD_LIST=!MOD_LIST!BepInExPack,BepInEx;"
+set "MOD_LIST=!MOD_LIST!LethalConfig,AinaVT;"
+set "MOD_LIST=!MOD_LIST!VertexLibrary,LethalCompanyModding;"
+set "MOD_LIST=!MOD_LIST!GeneralImprovements,ShaosilGaming;"
+set "MOD_LIST=!MOD_LIST!EnemySoundFixes,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!BarberFixes,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!JetpackFixes,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!MeleeFixes,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!WeedKillerFixes,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!CullFactory,fumiko;"
+set "MOD_LIST=!MOD_LIST!HideChat,Monkeytype;"
+set "MOD_LIST=!MOD_LIST!FixRPCLag,Bobbie;"
+set "MOD_LIST=!MOD_LIST!MoonPriceDisplay,Gloveman23;"
+set "MOD_LIST=!MOD_LIST!RankFix,Glitch;"
+set "MOD_LIST=!MOD_LIST!CoilHeadStare,TwinDimensionalProductions;"
+set "MOD_LIST=!MOD_LIST!NilsHUD,Nilaier;"
+set "MOD_LIST=!MOD_LIST!AccurateStaminaDisplay,ButteryStancakes;"
+set "MOD_LIST=!MOD_LIST!LethalRichPresence,mrov;"
+set "MOD_LIST=!MOD_LIST!AlwaysHearActiveWalkies,Suskitech;"
+set "MOD_LIST=!MOD_LIST!ShipLoot,tinyhoot;"
+set "MOD_LIST=!MOD_LIST!CompatibilityChecker,Ryokune;"
+set "MOD_LIST=!MOD_LIST!RuntimeIcons,LethalCompanyModding;"
 
-:: Calculate mod count (more efficient method)
+:: Calculate mod count
 set "MOD_COUNT=0"
-for %%a in ("%ModList:;=";"%") do set /a "MOD_COUNT+=1"
+for %%a in ("%MOD_LIST:;=";"%") do set /a "MOD_COUNT += 1"
 
-:: Check admin privileges using WHOAMI
-:CheckElevation
+:: =================================
+:: ELEVATION CHECK
+:: =================================
+:CHECK_ELEVATION
 WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
 if %errorlevel% equ 0 (
-    goto :ContinueInitialization
+    goto :CONTINUE_INITIALIZATION
 ) else (
-    call :RequestElevation
+    call :REQUEST_ELEVATION
     exit /b
 )
 
-:RequestElevation
+:REQUEST_ELEVATION
 if not exist "%TEMP_DIR%" (
     mkdir "%TEMP_DIR%" || (
         echo Failed to create temp directory: "%TEMP_DIR%"
@@ -113,7 +119,7 @@ echo Requesting administrator privileges...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& {Start-Process '%~f0' -Verb RunAs}"
 exit /b
 
-:ContinueInitialization
+:CONTINUE_INITIALIZATION
 :: Initialize log file after elevation
 echo [%date% %time%] Lethal Company Plus installation started > "%LOG_FILE%"
 echo [%date% %time%] Initializing installer... >> "%LOG_FILE%"
@@ -188,7 +194,166 @@ if !errorlevel! neq 0 (
     powershell Set-ExecutionPolicy RemoteSigned -Scope Process >nul 2>&1
 )
 
-goto :START_INSTALLATION
+::==================================
+:: MAIN INSTALLATION FLOW
+::==================================
+:START_INSTALLATION
+call :InitializeEnvironment
+if %errorlevel% neq 0 goto :ERROR
+
+call :LocateGame
+if %errorlevel% neq 0 goto :ERROR
+
+:: Single confirmation point
+call :SHOW_MOD_LIST_AND_CONFIRM
+if not exist "%CONFIRMATION_FILE%" (
+    call :Log "Installation cancelled by user" "console"
+    call :ColorEcho YELLOW "Installation cancelled"
+    set "INSTALL_STATUS=3"
+    goto :CLEANUP
+)
+
+:: Install all components
+call :INSTALL_BEPINEX_PACK
+if %errorlevel% neq 0 goto :ERROR
+
+call :INSTALL_ALL_MODS
+if %errorlevel% neq 0 goto :ERROR
+
+goto :CLEANUP
+
+::==================================
+:: MOD INSTALLATION FUNCTIONS
+::==================================
+:INSTALL_ALL_MODS
+setlocal EnableDelayedExpansion
+call :ColorEcho BLUE "► Beginning mod installation..."
+echo.
+call :ColorEcho WHITE "Installing %MOD_COUNT% mods..."
+
+for %%a in ("%MOD_LIST:;=";"%") do (
+    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+        if /i not "%%b"=="BepInExPack" (
+            call :INSTALL_SINGLE_MOD "%%c" "%%b"
+            if !errorlevel! neq 0 goto :ERROR
+        )
+    )
+)
+endlocal
+exit /b 0
+
+:INSTALL_SINGLE_MOD
+setlocal EnableDelayedExpansion
+set "MOD_AUTHOR=%~1"
+set "MOD_NAME=%~2"
+
+call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!"
+call :ColorEcho BLUE "► Installing !MOD_NAME!..."
+
+:: API call with line breaks for readability
+set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
+powershell -Command "$ErrorActionPreference = 'Stop';" ^
+    "try {" ^
+        "$ProgressPreference = 'SilentlyContinue';" ^
+        "$response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get;" ^
+        "$jsonResponse = $response | ConvertTo-Json -Depth 10;" ^
+        "$jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json' -Encoding UTF8;" ^
+        "Write-Output ('VERSION=' + $response.latest.version_number);" ^
+        "Write-Output ('URL=' + $response.latest.download_url)" ^
+    "} catch {" ^
+        "Write-Error $_.Exception.Message;" ^
+        "exit 1" ^
+    "}" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
+
+if !errorlevel! neq 0 (
+    call :HandleError "Failed to fetch mod info for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_api_error.log"
+    endlocal
+    exit /b 1
+)
+
+:: Parse version and URL using findstr
+for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "VERSION=%%a"
+for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
+
+:: Trim whitespace from parsed values
+set "VERSION=!VERSION: =!"
+set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
+
+if not defined VERSION (
+    call :Log "ERROR: Failed to parse version from API response"
+    call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
+    endlocal
+    exit /b 1
+)
+
+if not defined DOWNLOAD_URL (
+    call :Log "ERROR: Failed to parse download URL from API response"
+    call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
+    endlocal
+    exit /b 1
+)
+
+:: Clean up temporary files
+del "!TEMP_DIR!\!MOD_NAME!_response.json" 2>nul
+del "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>nul
+
+:: Setup paths with logging
+set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!VERSION!.zip"
+set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
+
+:: Download mod files
+call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
+if !errorlevel! neq 0 goto :ERROR
+
+:: Extract and install
+call :ExtractAndInstallMod "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
+if !errorlevel! neq 0 goto :ERROR
+
+:: Write version information
+call :WriteVersionInfo "!MOD_NAME!" "!VERSION!"
+if !errorlevel! neq 0 goto :ERROR
+
+call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!VERSION!"
+endlocal
+exit /b 0
+
+::==================================
+:: USER CONFIRMATION DIALOG
+:: =================================
+:SHOW_MOD_LIST_AND_CONFIRM
+setlocal EnableDelayedExpansion
+del "%CONFIRMATION_FILE%" 2>nul
+
+call :ColorEcho CYAN "The following mods will be installed:"
+echo.
+call :ColorEcho WHITE "  - BepInExPack (Core Mod Loader) by BepInEx"
+
+for %%a in ("%MOD_LIST:;=";"%") do (
+    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+        if /i not "%%b"=="BepInExPack" (
+            call :ColorEcho WHITE "  - %%b by %%c"
+        )
+    )
+)
+
+:: Get explicit confirmation
+:CONFIRM_LOOP
+echo.
+call :ColorEcho YELLOW "Install all listed mods? (Y/N)"
+set /p "USER_INPUT= "
+set "USER_INPUT=!USER_INPUT: =!"
+
+if /i "!USER_INPUT!"=="Y" (
+    echo CONFIRMED > "%CONFIRMATION_FILE%"
+    endlocal
+    exit /b 0
+) else if /i "!USER_INPUT!"=="N" (
+    endlocal
+    exit /b 1
+) else (
+    call :ColorEcho RED "Invalid input. Please enter Y or N."
+    goto :CONFIRM_LOOP
+)
 
 ::==================================
 :: Helper Functions (with documentation)
@@ -234,7 +399,7 @@ exit /b 0
 ::   1 - Missing requirements (PS version, disk space, etc.)
 :InitializeEnvironment
 setlocal EnableDelayedExpansion
-call :ColorEcho BLUE "► Initializing environment..."
+call :ColorEcho BLUE "► Initializing installer..."
 call :Log "Checking environment requirements..."
 
 :: Configure UTF-8 code page
@@ -282,7 +447,7 @@ exit /b 0
 ::   1 - Game not found
 :LocateGame
 setlocal EnableDelayedExpansion
-call :Log "Starting game location detection..." "console"
+call :Log "Starting game location detection..."
 call :ColorEcho BLUE "► Locating Lethal Company installation..."
 
 :: Check registry locations with proper quoting
@@ -338,7 +503,7 @@ if not exist "!FOUND_PATH!\Lethal Company.exe" (
     goto :ManualInput
 )
 call :ColorEcho GREEN "✓ Lethal Company install located at: !FOUND_PATH!"
-call :Log "Valid game path found: !FOUND_PATH!" "console"
+call :Log "Valid game path found: !FOUND_PATH!"
 endlocal & set "FOUND_PATH=%FOUND_PATH%"
 exit /b 0
 
@@ -516,8 +681,8 @@ set "URL=%~1"
 set "OUTPUT=%~2"
 set "MOD_NAME=%~3"
 
-call :Log "Downloading !MOD_NAME! from !URL!" "console"
-call :ColorEcho WHITE "⚙ Downloading !MOD_NAME!..."
+call :Log "Downloading !MOD_NAME! from !URL!"
+call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
 
 powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $webClient = New-Object System.Net.WebClient; $webClient.Headers.Add('User-Agent', 'Mozilla/5.0'); $webClient.DownloadFile('!URL!', '!OUTPUT!') } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
 
@@ -535,7 +700,7 @@ if not exist "!OUTPUT!" (
 
 for %%A in ("!OUTPUT!") do (
     if %%~zA LEQ 0 (
-        call :Log "ERROR: Downloaded file is empty for !MOD_NAME!" "console"
+        call :Log "ERROR: Downloaded file is empty for !MOD_NAME!"
         call :ColorEcho RED "ERROR: Download verification failed for !MOD_NAME!"
         del "!OUTPUT!" 2>nul
         endlocal
@@ -557,8 +722,8 @@ set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
 set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_NAME!"
 set "INSTALL_LOG=!LOG_DIR!\!MOD_NAME!_install.log"
 
-call :Log "Extracting !MOD_NAME! from !ZIP_FILE! to !EXTRACT_DIR!" "console"
-call :ColorEcho WHITE "⚙ Extracting files..."
+call :Log "Extracting !MOD_NAME! from !ZIP_FILE! to !EXTRACT_DIR!"
+call :ColorEcho WHITE "* Extracting files..."
 
 if exist "!MOD_EXTRACT_DIR!" (
     rd /s /q "!MOD_EXTRACT_DIR!" || (
@@ -584,15 +749,15 @@ if not exist "!INSTALL_DIR!" (
 )
 
 :: Check for plugins folder and handle file copying accordingly
-call :Log "Checking for plugins folder in !MOD_EXTRACT_DIR!" "console"
+call :Log "Checking for plugins folder in !MOD_EXTRACT_DIR!"
 if exist "!MOD_EXTRACT_DIR!\plugins" (
-    call :Log "Found plugins folder - performing two-step copy" "console"
+    call :Log "Found plugins folder - performing two-step copy"
     
     :: Step 1: Copy files from within plugins folder
     powershell -Command "$ErrorActionPreference = 'Stop'; try { $source = '!MOD_EXTRACT_DIR!\plugins'; Get-ChildItem -Path $source -Recurse -File | Copy-Item -Destination '!INSTALL_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" >> "!INSTALL_LOG!" 2>&1
     
     if !errorlevel! neq 0 (
-        call :Log "ERROR: Failed to copy files from plugins folder - Check !INSTALL_LOG!" "console"
+        call :Log "ERROR: Failed to copy files from plugins folder - Check !INSTALL_LOG!"
         call :ColorEcho RED "ERROR: Installation failed for !MOD_NAME!"
         type "!INSTALL_LOG!" >> "!LOG_FILE!"
         endlocal
@@ -602,7 +767,7 @@ if exist "!MOD_EXTRACT_DIR!\plugins" (
     :: Step 2: Copy files from root (excluding plugins folder)
     powershell -Command "$ErrorActionPreference = 'Stop'; try { Get-ChildItem -Path '!MOD_EXTRACT_DIR!' -Exclude 'plugins' -Recurse -File | Copy-Item -Destination '!INSTALL_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" >> "!INSTALL_LOG!" 2>&1
 ) else (
-    call :Log "No plugins folder found - copying all files from root" "console"
+    call :Log "No plugins folder found - copying all files from root"
     
     :: Copy all files from root
     powershell -Command "$ErrorActionPreference = 'Stop'; try { Get-ChildItem -Path '!MOD_EXTRACT_DIR!' -Recurse -File | Copy-Item -Destination '!INSTALL_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" >> "!INSTALL_LOG!" 2>&1
@@ -772,10 +937,10 @@ setlocal EnableDelayedExpansion
 set "MOD_AUTHOR=%~1"
 set "MOD_NAME=%~2"
 
-call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!" "console"
+call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!"
 call :ColorEcho BLUE "► Installing !MOD_NAME!..."
 
-:: Construct API URL with proper escaping
+:: Corrected API URL with proper name/author order
 set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
 call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
 
@@ -797,14 +962,14 @@ set "VERSION=!VERSION: =!"
 set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
 if not defined VERSION (
-    call :Log "ERROR: Failed to parse version from API response" "console"
+    call :Log "ERROR: Failed to parse version from API response"
     call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
     endlocal
     exit /b 1
 )
 
 if not defined DOWNLOAD_URL (
-    call :Log "ERROR: Failed to parse download URL from API response" "console"
+    call :Log "ERROR: Failed to parse download URL from API response"
     call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
     endlocal
     exit /b 1
@@ -820,33 +985,24 @@ set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
 
 :: Download mod files
 call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
-if !errorlevel! neq 0 (
-    endlocal
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :ERROR
 
 :: Extract and install
 call :ExtractAndInstallMod "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
-if !errorlevel! neq 0 (
-    endlocal
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :ERROR
 
-:: Write version information (This MUST happen BEFORE endlocal)
+:: Write version information
 call :WriteVersionInfo "!MOD_NAME!" "!VERSION!"
-if !errorlevel! neq 0 (
-    endlocal
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :ERROR
 
 call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!VERSION!"
 endlocal
 exit /b 0
 
 :: 14. Install BepInExPack
-:InstallBepInExPack
+:INSTALL_BEPINEX_PACK
 setlocal EnableDelayedExpansion
-call :Log "Starting BepInExPack installation..." "console"
+call :Log "Starting BepInExPack installation..."
 call :ColorEcho BLUE "► Installing BepInExPack..."
 
 :: Construct API URL
@@ -857,7 +1013,7 @@ call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
 powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get; $jsonResponse = $response | ConvertTo-Json -Depth 10; $jsonResponse | Out-File '!TEMP_DIR!\BepInExPack_response.json' -Encoding UTF8; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\BepInExPack_api.txt" 2>"!LOG_DIR!\BepInExPack_api_error.log"
 
 if !errorlevel! neq 0 (
-    call :Log "ERROR: Failed to fetch BepInExPack info - Check !LOG_DIR!\BepInExPack_api_error.log" "console"
+    call :Log "ERROR: Failed to fetch BepInExPack info - Check !LOG_DIR!\BepInExPack_api_error.log"
     call :ColorEcho RED "ERROR: Failed to fetch BepInExPack data"
     type "!LOG_DIR!\BepInExPack_api_error.log" >> "!LOG_FILE!"
     endlocal
@@ -878,10 +1034,7 @@ set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\BepInExPack"
 
 :: Download BepInExPack
 call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "BepInExPack"
-if !errorlevel! neq 0 (
-    endlocal
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :ERROR
 
 :: Extract BepInExPack
 call :Log "Extracting BepInExPack..." "console"
@@ -899,17 +1052,17 @@ if !errorlevel! neq 0 (
 :: Set the correct source directory
 set "SOURCE_DIR=!MOD_EXTRACT_DIR!\BepInExPack"
 if not exist "!SOURCE_DIR!\BepInEx\*" (
-    call :Log "ERROR: BepInEx folder not found in extracted BepInExPack contents" "console"
+    call :Log "ERROR: BepInEx folder not found in extracted BepInExPack contents"
     call :ColorEcho RED "ERROR: Invalid BepInExPack structure"
     endlocal
     exit /b 1
 )
 
 :: Copy the entire BepInEx folder to the game's root
-call :Log "Copying BepInEx files to: !FOUND_PATH!" "console"
+call :Log "Copying BepInEx files to: !FOUND_PATH!"
 xcopy "!SOURCE_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /H /C /I /Y /Q >>"!LOG_DIR!\BepInExPack_install.log" 2>&1
 if !errorlevel! neq 0 (
-    call :Log "ERROR: Failed to copy BepInEx files" "console"
+    call :Log "ERROR: Failed to copy BepInEx files"
     call :ColorEcho RED "ERROR: Installation failed"
     type "!LOG_DIR!\BepInExPack_install.log" >> "!LOG_FILE!"
     endlocal
@@ -919,7 +1072,7 @@ if !errorlevel! neq 0 (
 :: Create plugins folder if it doesn't exist
 if not exist "!FOUND_PATH!\BepInEx\plugins" (
     mkdir "!FOUND_PATH!\BepInEx\plugins"
-    call :Log "Created missing BepInEx\plugins folder." "console"
+    call :Log "Created missing BepInEx\plugins folder."
 )
 
 :: Copy additional root files (winhttp.dll, doorstop_config.ini, changelog.txt)
@@ -929,7 +1082,7 @@ for %%a in ("winhttp.dll", "doorstop_config.ini", "changelog.txt") do (
         call :Log "Copying !SOURCE_FILE! to game root"
         copy "!SOURCE_FILE!" "!FOUND_PATH!\" /Y >>"!LOG_DIR!\BepInExPack_install.log" 2>&1
         if !errorlevel! neq 0 (
-            call :Log "ERROR: Failed to copy file: %%a" "console"
+            call :Log "ERROR: Failed to copy file: %%a"
             call :ColorEcho RED "ERROR: Failed to copy file: %%a"
             type "!LOG_DIR!\BepInExPack_install.log" >> "!LOG_FILE!"
             endlocal
@@ -945,7 +1098,7 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
-call :Log "BepInExPack installation completed successfully" "console"
+call :Log "BepInExPack installation completed successfully"
 call :ColorEcho GREEN "✓ BepInExPack installed successfully"
 endlocal
 exit /b 0
@@ -962,7 +1115,7 @@ call :ColorEcho CYAN "The following mods will be installed:"
 echo.
 
 :: Preview all mods first
-for %%a in ("%ModList:;=";"%") do (
+for %%a in ("%MOD_LIST:;=";"%") do (
     for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
         if /i not "%%b"=="BepInExPack" (
             call :ColorEcho WHITE "  - %%b by %%c"
@@ -972,7 +1125,7 @@ for %%a in ("%ModList:;=";"%") do (
 echo.
 
 :: User confirmation before proceeding
-call :Log "All mods listed. Awaiting user confirmation..." "console"
+call :Log "All mods listed. Awaiting user confirmation..."
 call :ColorEcho YELLOW "Ready to begin installation. This may take a few minutes."
 set /p "CONTINUE=Press Enter to start installation or Ctrl+C to cancel..."
 echo.
@@ -985,10 +1138,10 @@ if !errorlevel! neq 0 (
 )
 
 :: Install each mod
-for %%a in ("%ModList:;=";"%") do (
+for %%a in ("%MOD_LIST:;=";"%") do (
     for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
         if /i not "%%b"=="BepInExPack" (
-            call :Log "Processing mod: %%b by %%c" "console"
+            call :Log "Processing mod: %%b by %%c"
             call :InstallMod "%%c" "%%b"
             if !errorlevel! neq 0 (
                 call :HandleError "Failed to install mod: %%b"
@@ -999,73 +1152,20 @@ for %%a in ("%ModList:;=";"%") do (
     )
 )
 
-call :Log "Installation completed successfully" "console"
+call :Log "Installation completed successfully"
 call :ColorEcho GREEN "✓ Installation completed successfully!"
 endlocal
 exit /b 0
 
 ::==================================
-:: Main Entry Point
-::==================================
-:START_INSTALLATION
-call :InitializeEnvironment
-if %errorlevel% neq 0 goto :ERROR
-
-call :LocateGame
-if %errorlevel% neq 0 goto :ERROR
-
-:: Show mod list and get confirmation BEFORE any installation
-call :ShowModListAndConfirm
-if %errorlevel% neq 0 goto :ERROR
-
-:: Install BepInEx first
-call :InstallBepInExPack
-if %errorlevel% neq 0 goto :ERROR
-
-:: Then install all other mods
-call :InstallComponents
-if %errorlevel% neq 0 goto :ERROR
-
-goto :CLEANUP
-
-:ShowModListAndConfirm
-call :Log "Displaying mod list to user..."
-call :ColorEcho CYAN "The following will be installed:"
-echo.
-call :ColorEcho WHITE "  - BepInExPack (Core Mod Loader) by BepInEx"
-
-:: Log mod list display
-call :Log "Displayed BepInExPack in mod list"
-
-for %%a in ("%ModList:;=";"%") do (
-    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
-        if /i not "%%b"=="BepInExPack" (
-            call :ColorEcho WHITE "  - %%b by %%c"
-            call :Log "Displayed mod in list: %%b by %%c"
-        )
-    )
-)
-
-echo.
-call :ColorEcho YELLOW "This will install %MOD_COUNT% mods including BepInEx."
-call :ColorEcho YELLOW "Press Enter to continue or Ctrl+C to cancel..."
-set /p "CONTINUE= "
-call :Log "User confirmed installation" "console"
-exit /b 0
-
-:InstallOtherMods
-setlocal EnableDelayedExpansion
-call :Log "Starting mod installation process..." "console"
-
-:: Rest of installation logic remains unchanged...
-
-::==================================
-:: Error Handling and Cleanup
+:: Cleanup and Error Handling
 ::==================================
 
 :: 17. Error handling function
 :ERROR
 setlocal EnableDelayedExpansion
+if "!INSTALL_STATUS!" equ "3" goto :CLEANUP
+
 echo.
 call :ColorEcho RED "X Installation failed!"
 echo.
@@ -1078,18 +1178,6 @@ echo • Verify your game files through Steam
 echo.
 call :ColorEcho YELLOW "If the problem persists, please report this issue"
 call :ColorEcho YELLOW "by creating a GitHub issue with the log files."
-
-:: Attempt to restore backup
-if defined BACKUP_DIR (
-    if exist "!BACKUP_DIR!\BepInEx" (
-        echo.
-        call :ColorEcho YELLOW "Would you like to restore the backup? [Y/N]"
-        set /p "RESTORE="
-        if /i "!RESTORE!"=="Y" (
-            call :RestoreBackup
-        )
-    )
-)
 endlocal
 goto :CLEANUP
 
@@ -1108,12 +1196,26 @@ del /f /q "!TEMP_DIR!\*.zip" 2>nul
 del /f /q "!TEMP_DIR!\*_api.txt" 2>nul
 del /f /q "!TEMP_DIR!\*_response.json" 2>nul
 
+:: Remove confirmation file
+if exist "%CONFIRMATION_FILE%" (
+    del "%CONFIRMATION_FILE%" && (
+        call :Log "Cleaned up confirmation file"
+    ) || (
+        call :Log "WARNING: Failed to delete confirmation file" "console"
+    )
+)
+
 endlocal
 
 echo.
-call :ColorEcho CYAN "Thanks for using Lethal Company Plus!"
+if %INSTALL_STATUS% equ 0 (
+    call :ColorEcho CYAN "Thanks for using Lethal Company Plus!"
+) else (
+    call :ColorEcho RED "Installation encountered errors. See log for details."
+)
 call :ColorEcho CYAN "Press any key to exit..."
 pause >nul
+exit /b %INSTALL_STATUS%
 
 :: Error handler
 :: Purpose: Centralized error processing and reporting
