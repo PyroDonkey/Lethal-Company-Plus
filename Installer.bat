@@ -23,8 +23,8 @@ set "WHITE="
 set "RESET="
 
 :: Add version variables here
-set "VERSION=1.2.0"
-set "LAST_MODIFIED=2025-02-10"
+set "VERSION=1.2.2"
+set "LAST_MODIFIED=2025-02-11"
 
 :: ANSI color support variables
 set "ANSI_SUPPORT=0"
@@ -53,7 +53,6 @@ set "ERROR_CODE="
 
 :: Add to initialization section
 set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
-set "INSTALL_STATUS=0"
 
 :: =================================
 :: MOD LIST DEFINITION
@@ -90,6 +89,19 @@ for %%a in ("%MOD_LIST:;=";"%") do set /a "MOD_COUNT += 1"
 :: =================================
 :: ELEVATION CHECK
 :: =================================
+:: ======================================================================
+:: FUNCTION: CHECK_ELEVATION
+:: PURPOSE: Verifies script is running with administrator privileges
+:: PARAMETERS: None
+:: GLOBALS:
+::   TEMP_DIR (creates) - Temporary directory for elevation artifacts
+:: ERROR CODES:
+::   0 - Already elevated
+::   1 - Failed to request elevation
+:: NOTES:
+::   - Uses WHOAMI /GROUPS to check privilege level
+::   - Fallback to PowerShell elevation if needed
+:: ======================================================================
 :CHECK_ELEVATION
 WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -99,6 +111,19 @@ if %errorlevel% equ 0 (
     exit /b
 )
 
+:: ======================================================================
+:: FUNCTION: REQUEST_ELEVATION
+:: PURPOSE: Relaunches script with administrator privileges
+:: PARAMETERS: None
+:: GLOBALS:
+::   TEMP_DIR (creates) - Temporary directory for elevation artifacts
+::   LOG_DIR (creates) - Log directory for elevation process
+:: ERROR CODES:
+::   1 - Critical failure creating required directories
+:: NOTES:
+::   - Uses PowerShell Start-Process with RunAs verb
+::   - Requires temporary directory creation for log storage
+:: ======================================================================
 :REQUEST_ELEVATION
 if not exist "%TEMP_DIR%" (
     mkdir "%TEMP_DIR%" || (
@@ -118,6 +143,19 @@ echo Requesting administrator privileges...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& {Start-Process '%~f0' -Verb RunAs}"
 exit /b
 
+:: ======================================================================
+:: FUNCTION: CONTINUE_INITIALIZATION
+:: PURPOSE: Post-elevation environment setup and validation
+:: PARAMETERS: None
+:: GLOBALS:
+::   LOG_FILE (initializes) - Main debug log
+::   TEMP_DIR (validates) - Temporary workspace
+:: ERROR CODES:
+::   1 - Directory creation failure
+:: NOTES:
+::   - Must be called after successful elevation
+::   - Establishes final logging configuration
+:: ======================================================================
 :CONTINUE_INITIALIZATION
 :: Initialize log file after elevation
 echo [%date% %time%] Lethal Company Plus installation started > "%LOG_FILE%"
@@ -196,12 +234,24 @@ if !errorlevel! neq 0 (
 ::==================================
 :: MAIN INSTALLATION FLOW
 ::==================================
+:: ======================================================================
+:: FUNCTION: START_INSTALLATION
+:: PURPOSE: Main installation workflow controller
+:: PARAMETERS: None
+:: GLOBALS:
+::   INSTALL_STATUS (modifies) - Tracks overall progress
+:: ERROR CODES:
+::   0 - Successful execution
+::   Non-zero - Propagates from subfunctions
+:: NOTES:
+::   - Orchestrates initialization, installation, and cleanup
+:: ======================================================================
 :START_INSTALLATION
 call :InitializeEnvironment
-if %errorlevel% neq 0 goto :ERROR
+if %errorlevel% neq 0 call :HandleError "Environment initialization failed" 1
 
 call :LocateGame
-if %errorlevel% neq 0 goto :ERROR
+if %errorlevel% neq 0 call :HandleError "Game location failed" 2
 
 :: Single confirmation point
 call :SHOW_MOD_LIST_AND_CONFIRM
@@ -214,16 +264,29 @@ if not exist "%CONFIRMATION_FILE%" (
 
 :: Install all components
 call :INSTALL_BEPINEX_PACK
-if %errorlevel% neq 0 goto :ERROR
+if %errorlevel% neq 0 call :HandleError "BepInEx installation failed" 3
 
 call :INSTALL_ALL_MODS
-if %errorlevel% neq 0 goto :ERROR
+if %errorlevel% neq 0 call :HandleError "Mod installation failed" 4
 
 goto :CLEANUP
 
 ::==================================
 :: MOD INSTALLATION FUNCTIONS
 ::==================================
+:: ======================================================================
+:: FUNCTION: INSTALL_ALL_MODS
+:: PURPOSE: Iterates through MOD_LIST installing each mod
+:: PARAMETERS: None
+:: GLOBALS:
+::   MOD_LIST (reads) - List of mods to install
+::   MOD_COUNT (reads) - Total mod quantity
+:: ERROR CODES:
+::   Propagates error codes from INSTALL_SINGLE_MOD
+:: NOTES:
+::   - Skips BepInExPack entry
+::   - Processes mods in MOD_LIST order
+:: ======================================================================
 :INSTALL_ALL_MODS
 setlocal EnableDelayedExpansion
 call :ColorEcho BLUE "► Beginning mod installation..."
@@ -234,13 +297,29 @@ for %%a in ("%MOD_LIST:;=";"%") do (
     for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
         if /i not "%%b"=="BepInExPack" (
             call :INSTALL_SINGLE_MOD "%%c" "%%b"
-            if !errorlevel! neq 0 goto :ERROR
+            if !errorlevel! neq 0 call :HandleError "Failed to install mod: %%b"
         )
     )
 )
 endlocal
 exit /b 0
 
+:: ======================================================================
+:: FUNCTION: INSTALL_SINGLE_MOD
+:: PURPOSE: Handles full installation lifecycle for one mod
+:: PARAMETERS:
+::   %1 - Mod author (Thunderstore namespace)
+::   %2 - Mod name
+:: GLOBALS:
+::   MOD_DOWNLOAD_SOURCE_URL (sets) - Download URL
+::   MOD_EXTRACTION_ROOT_DIR (sets) - Extraction path
+:: ERROR CODES:
+::   2 - API communication failure
+::   1 - General installation error
+:: NOTES:
+::   - Creates mod-specific temp files
+::   - Validates Thunderstore API responses
+:: ======================================================================
 :INSTALL_SINGLE_MOD
 setlocal EnableDelayedExpansion
 set "MOD_AUTHOR=%~1"
@@ -249,36 +328,37 @@ set "MOD_NAME=%~2"
 call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!"
 call :ColorEcho BLUE "► Installing !MOD_NAME!..."
 
-:: API call with line breaks for readability
-set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
+:: API call with improved error logging
+set "THUNDERSTORE_API_ENDPOINT=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
 powershell -Command "$ErrorActionPreference = 'Stop';" ^
     "try {" ^
         "$ProgressPreference = 'SilentlyContinue';" ^
-        "$response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get;" ^
+        "$response = Invoke-RestMethod -Uri '!THUNDERSTORE_API_ENDPOINT!' -Method Get;" ^
+        "if (-not $response.latest) { throw 'Invalid API response structure' };" ^
         "$jsonResponse = $response | ConvertTo-Json -Depth 10;" ^
         "$jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json' -Encoding UTF8;" ^
         "Write-Output ('VERSION=' + $response.latest.version_number);" ^
         "Write-Output ('URL=' + $response.latest.download_url)" ^
     "} catch {" ^
-        "Write-Error $_.Exception.Message;" ^
+        "Write-Error (\"API Error: $_\");" ^
         "exit 1" ^
     "}" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
 
 if !errorlevel! neq 0 (
-    call :HandleError "Failed to fetch mod info for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_api_error.log"
+    call :HandleError "Failed to fetch mod info for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_api_error.log"
     endlocal
-    exit /b 1
+    exit /b 2
 )
 
 :: Parse version and URL using findstr
-for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "VERSION=%%a"
+for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "MOD_VERSION=%%a"
 for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
 
 :: Trim whitespace from parsed values
-set "VERSION=!VERSION: =!"
+set "MOD_VERSION=!MOD_VERSION: =!"
 set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
-if not defined VERSION (
+if not defined MOD_VERSION (
     call :Log "ERROR: Failed to parse version from API response"
     call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
     endlocal
@@ -297,28 +377,41 @@ del "!TEMP_DIR!\!MOD_NAME!_response.json" 2>nul
 del "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>nul
 
 :: Setup paths with logging
-set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!VERSION!.zip"
+set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
 set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
 
 :: Download mod files
 call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
-if !errorlevel! neq 0 goto :ERROR
+if !errorlevel! neq 0 call :HandleError "Download failed for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_download.log"
 
 :: Extract and install
 call :ExtractAndInstallMod "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
-if !errorlevel! neq 0 goto :ERROR
+if !errorlevel! neq 0 call :HandleError "Failed to extract !MOD_NAME! (!ZIP_FILE!)" 1 "!LOG_DIR!\!MOD_NAME!_extract.log"
 
 :: Write version information
-call :WriteVersionInfo "!MOD_NAME!" "!VERSION!"
-if !errorlevel! neq 0 goto :ERROR
+call :WriteVersionInfo "!MOD_NAME!" "!MOD_VERSION!"
+if !errorlevel! neq 0 call :HandleError "Failed to write version information for !MOD_NAME!" 6
 
-call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!VERSION!"
+call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION!"
 endlocal
 exit /b 0
 
 ::==================================
 :: USER CONFIRMATION DIALOG
 :: =================================
+:: ======================================================================
+:: FUNCTION: SHOW_MOD_LIST_AND_CONFIRM
+:: PURPOSE: Displays mod list and gets user confirmation
+:: PARAMETERS: None
+:: GLOBALS:
+::   MOD_COUNT (reads) - Display total mod count
+::   CONFIRMATION_FILE (creates) - User agreement marker
+:: ERROR CODES:
+::   3 - User cancellation
+:: NOTES:
+::   - Uses paginated display for large mod lists
+::   - Creates flag file for confirmation tracking
+:: ======================================================================
 :SHOW_MOD_LIST_AND_CONFIRM
 setlocal EnableDelayedExpansion
 del "%CONFIRMATION_FILE%" 2>nul
@@ -358,13 +451,19 @@ if /i "!USER_INPUT!"=="Y" (
 :: Helper Functions (with documentation)
 ::==================================
 
-:: Logging function
-:: Purpose: Writes messages to log file and optionally to console
-:: Parameters:
-::   %1 - Message to log
-::   %2 - "console" to also output to console
-:: Globals Modified: LOG_FILE
-:: Error Codes: Always returns 0
+:: ======================================================================
+:: FUNCTION: Log
+:: PURPOSE: Writes timestamped messages to log file with console optional
+:: PARAMETERS:
+::   %1 - String message to log (required)
+::   %2 - If "console", duplicates output to stdout (optional)
+:: GLOBALS:
+::   LOG_FILE (appends) - Maintains session history
+:: ERROR CODES: Always 0 (non-fatal)
+:: NOTES:
+::   - Uses localized date/time format from %date% and %time%
+::   - UTF-8 handling depends on earlier chcp 65001 call
+:: ======================================================================
 :Log
 set "MESSAGE=%~1"
 set "CONSOLE=%~2"
@@ -372,13 +471,19 @@ echo [%date% %time%] !MESSAGE! >> "!LOG_FILE!"
 if "!CONSOLE!"=="console" echo !MESSAGE!
 exit /b 0
 
-:: Colored output function
-:: Purpose: Outputs text with ANSI color codes if supported
-:: Parameters:
+:: ======================================================================
+:: FUNCTION: ColorEcho 
+:: PURPOSE: Outputs color-formatted text using ANSI escape codes
+:: PARAMETERS:
 ::   %1 - Color name (GREEN, RED, etc.)
-::   %2 - Message to display
-:: Globals Modified: Uses color variables (GREEN, RED, etc.)
-:: Error Codes: Always returns 0
+::   %2 - Text to display
+:: GLOBALS:
+::   Uses color variables (GREEN, RED, etc.) - Set during init
+:: ERROR CODES: Always 0
+:: NOTES:
+::   - Falls back to plain text if ANSI not supported
+::   - Color names must match global variable names
+:: ======================================================================
 :ColorEcho
 set "COLOR=%~1"
 set "MESSAGE=%~2"
@@ -388,6 +493,60 @@ if defined %COLOR% (
     echo !MESSAGE!
 )
 exit /b 0
+
+:: ======================================================================
+:: FUNCTION: HandleError
+:: PURPOSE: Centralized error processing and user reporting
+:: PARAMETERS:
+::   %1 - Human-readable error description
+::   %2 - Numeric error code (1-6)
+::   %3 - Optional path to detailed log file
+:: GLOBALS:
+::   INSTALL_STATUS (sets) - Final exit code
+::   LOG_FILE (appends) - Error details
+:: ERROR CODES: Returns input %2 value
+:: NOTES:
+::   - Formats error code descriptions automatically
+::   - Preserves original error context for debugging
+:: ======================================================================
+:HandleError
+setlocal EnableDelayedExpansion
+set "ERROR_DESCRIPTION=%~1"
+set "ERROR_CATEGORY_CODE=%~2"
+set "ERROR_LOG=%~3"
+
+:: Error code descriptions
+set "ERROR_CODE_1=General error"
+set "ERROR_CODE_2=PowerShell/Network failure"
+set "ERROR_CODE_3=File/directory not found"
+set "ERROR_CODE_4=Insufficient disk space"
+set "ERROR_CODE_5=Backup/restore failure"
+set "ERROR_CODE_6=BepInEx configuration error"
+
+:: Enhanced error formatting
+call :Log "ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION! (!ERROR_CATEGORY_CODE_!ERROR_CODE!!)" "console"
+call :ColorEcho RED "X ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION! (!ERROR_CATEGORY_CODE_!ERROR_CODE!!)"
+
+:: Include log file contents if provided
+if defined ERROR_LOG (
+    if exist "!ERROR_LOG!" (
+        call :Log "Additional error details from !ERROR_LOG!:" "console"
+        type "!ERROR_LOG!" >> "!LOG_FILE!"
+        call :Log "----------------------------------------" "console"
+    )
+)
+
+:: Add troubleshooting context
+call :Log "Troubleshooting steps:" "console"
+call :Log "1. Verify internet connection" "console"
+call :Log "2. Check antivirus/firewall settings" "console"
+call :Log "3. Ensure sufficient disk space" "console"
+call :Log "4. Retry with administrator privileges" "console"
+
+endlocal & (
+    set "INSTALL_STATUS=%ERROR_CATEGORY_CODE%"
+    exit /b %ERROR_CATEGORY_CODE%
+)
 
 :: Environment initialization
 :: Purpose: Verifies system requirements and prepares environment
@@ -408,27 +567,27 @@ call :Log "Set active code page to 65001 (UTF-8)"
 :: Check PowerShell version
 powershell -Command "$ErrorActionPreference = 'Stop'; try { if ($PSVersionTable.PSVersion.Major -lt 5) { throw 'PowerShell 5.0+ required' } } catch { $_.Exception | Out-File '!LOG_DIR!\ps_version_check.log'; exit 1 }" >nul 2>&1
 if !errorlevel! neq 0 (
-    call :HandleError "PowerShell 5.0 or higher is required" 1 "!LOG_DIR!\ps_version_check.log"
+    call :HandleError "PowerShell 5.0 or higher required" 2 "!LOG_DIR!\ps_version_check.log"
     endlocal
-    exit /b 1
+    exit /b 2
 )
 
 :: Check internet connectivity
 call :Log "Checking internet connectivity..."
 powershell -Command "$ErrorActionPreference = 'Stop'; try { Test-NetConnection -ComputerName thunderstore.io -Port 443 } catch { $_.Exception | Out-File '!LOG_DIR!\connectivity_check.log'; exit 1 }" >nul 2>&1
 if !errorlevel! neq 0 (
-    call :HandleError "No internet connection or Thunderstore.io is unreachable" 1 "!LOG_DIR!\connectivity_check.log"
+    call :HandleError "No internet connection or Thunderstore.io unreachable" 3 "!LOG_DIR!\connectivity_check.log"
     endlocal
-    exit /b 1
+    exit /b 3
 )
 
 :: Check available disk space
 call :Log "Checking available disk space..."
 powershell -Command "$ErrorActionPreference = 'Stop'; try { $drive = (Get-Item '%TEMP%').PSDrive; if ($drive.Free -lt 1GB) { throw 'Insufficient disk space' } } catch { $_.Exception | Out-File '!LOG_DIR!\space_check.log'; exit 1 }" >nul 2>&1
 if !errorlevel! neq 0 (
-    call :HandleError "Insufficient disk space (1GB required)" 1 "!LOG_DIR!\space_check.log"
+    call :HandleError "Insufficient disk space (1GB required)" 4 "!LOG_DIR!\space_check.log"
     endlocal
-    exit /b 1
+    exit /b 4
 )
 
 call :Log "Environment check completed successfully"
@@ -493,6 +652,18 @@ echo Enter your Lethal Company path (containing Lethal Company.exe):
 set /p "FOUND_PATH=Path: "
 if not defined FOUND_PATH goto :ManualInput
 
+:: ======================================================================
+:: FUNCTION: ValidateGamePath
+:: PURPOSE: Verifies game installation path validity
+:: PARAMETERS: None
+:: GLOBALS:
+::   FOUND_PATH (validates) - Game directory path
+:: ERROR CODES:
+::   3 - Path validation failed (missing Lethal Company.exe)
+:: NOTES:
+::   - Triggers manual input fallback on failure
+::   - Case-insensitive file existence check
+:: ======================================================================
 :ValidateGamePath
 set "FOUND_PATH=!FOUND_PATH:"=!"
 if "!FOUND_PATH:~-1!"=="\" set "FOUND_PATH=!FOUND_PATH:~0,-1!"
@@ -510,15 +681,21 @@ exit /b 0
 :: More Helper Functions (continuing in required order)
 ::==================================
 
-:: Backup creation
-:: Purpose: Creates backup of existing mod installation
-:: Parameters: None
-:: Globals Modified:
-::   Sets BACKUP_DIR
-::   Uses FOUND_PATH
-:: Error Codes:
-::   0 - Success or no backup needed
-::   1 - Backup failure
+:: ========================================================================
+:: FUNCTION: CreateBackup
+:: PURPOSE: Creates safety backup of existing BepInEx configuration
+:: PARAMETERS: None
+:: GLOBALS:
+::   BACKUP_DIR (creates) - Backup storage location
+::   FOUND_PATH (reads) - Game installation directory
+:: ERROR CODES:
+::   0 - Backup successful
+::   5 - Backup directory creation failed
+::   5 - File copy failure during backup
+:: NOTES:
+::   - Only creates backup if BepInEx exists
+::   - Uses xcopy for robust directory replication
+:: ========================================================================
 :CreateBackup
 setlocal EnableDelayedExpansion
 call :ColorEcho BLUE "► Creating backup..."
@@ -529,14 +706,14 @@ set "BACKUP_DIR=%BACKUP_DIR: =0%"
 :: Check if BepInEx exists
 if exist "!FOUND_PATH!\BepInEx" (
     mkdir "!BACKUP_DIR!" 2>nul || (
-        call :HandleError "Failed to create backup directory" 4
+        call :HandleError "Failed to create backup directory" 5
         goto :CreateBackup_End
     )
 
     :: Create backup with logging
-    xcopy "!FOUND_PATH!\BepInEx" "!BACKUP_DIR!\BepInEx\" /E /H /C /I /Y /Q >"!LOG_DIR!\backup.log" 2>&1
+    xcopy "!FOUND_PATH!\BepInEx" "!BACKUP_DIR!\BepInEx\" /E /H /C /I /Y /Q >nul 2>nul
     if !errorlevel! neq 0 (
-        call :HandleError "Failed to create backup" 1 "!LOG_DIR!\backup.log"
+        call :HandleError "Failed to create backup" 5 "!LOG_DIR!\backup.log"
         goto :CreateBackup_End
     )
 
@@ -559,7 +736,19 @@ if exist "!FOUND_PATH!\BepInEx" (
 endlocal & set "BACKUP_DIR=%BACKUP_DIR%"
 exit /b 0
 
-:: 6. Restore from backup
+:: ======================================================================
+:: FUNCTION: RestoreBackup
+:: PURPOSE: Restores BepInEx configuration from backup
+:: PARAMETERS: None
+:: GLOBALS:
+::   BACKUP_DIR (reads) - Backup source location
+::   FOUND_PATH (modifies) - Game installation directory
+:: ERROR CODES:
+::   5 - Restoration failure
+:: NOTES:
+::   - Uses xcopy for directory mirroring
+::   - Preserves original backup on failure
+:: ======================================================================
 :RestoreBackup
 setlocal EnableDelayedExpansion
 call :ColorEcho BLUE "► Restoring backup..."
@@ -580,7 +769,7 @@ if exist "!FOUND_PATH!\BepInEx" (
 )
 
 :: Restore BepInEx directory
-xcopy "!BACKUP_DIR!\BepInEx" "!FOUND_PATH!\BepInEx\" /E /H /C /I /Y /Q >"!LOG_DIR!\restore.log" 2>&1
+xcopy "!BACKUP_DIR!\BepInEx" "!FOUND_PATH!\BepInEx\" /E /H /C /I /Y /Q >nul 2>nul
 if !errorlevel! neq 0 (
     call :HandleError "Failed to restore BepInEx directory" 1 "!LOG_DIR!\restore.log"
     goto :RestoreBackup_End
@@ -604,16 +793,13 @@ exit /b 0
 :WriteVersionInfo
 set "MOD_NAME=%~1"
 set "MOD_VERSION=%~2"
-set "TEMP_FILE=%TEMP%\version_temp.txt"
-
-set "VERSION_FILE=!FOUND_PATH!\BepInEx\config\LCPlus_Versions.txt"
+set "VERSION_FILE=!FOUND_PATH!\BepInEx\config\LC_PLUS_VERSIONS.txt"
 
 :: Create config directory if it doesn't exist
 if not exist "!FOUND_PATH!\BepInEx\config" (
-    mkdir "!FOUND_PATH!\BepInEx\config" 2>nul
-    if !errorlevel! neq 0 (
-        call :HandleError "Failed to create config directory for mod: !MOD_NAME!" 6
-        exit /b
+    mkdir "!FOUND_PATH!\BepInEx\config" 2>nul || (
+        call :HandleError "Failed to create config directory" 6
+        exit /b 6
     )
 )
 
@@ -628,8 +814,8 @@ if not exist "!VERSION_FILE!" (
 )
 
 :: Create temporary file for version updates
-if exist "!TEMP_FILE!" del /f /q "!TEMP_FILE!"
-type nul > "!TEMP_FILE!" 2>nul
+if exist "!TEMP_CFG!" del /f /q "!TEMP_CFG!"
+type nul > "!TEMP_CFG!" 2>nul
 if !errorlevel! neq 0 (
     call :HandleError "Failed to create temporary file"
     exit /b 1
@@ -638,23 +824,23 @@ if !errorlevel! neq 0 (
 set "FOUND=0"
 for /f "usebackq tokens=1,* delims==" %%a in ("!VERSION_FILE!") do (
     if "%%a"=="!MOD_NAME!" (
-        echo !MOD_NAME!=!MOD_VERSION!>> "!TEMP_FILE!"
+        echo !MOD_NAME!=!MOD_VERSION!>> "!TEMP_CFG!"
         set "FOUND=1"
     ) else (
-        echo %%a=%%b>> "!TEMP_FILE!"
+        echo %%a=%%b>> "!TEMP_CFG!"
     )
 )
 
 if !FOUND!==0 (
-    echo !MOD_NAME!=!MOD_VERSION!>> "!TEMP_FILE!"
+    echo !MOD_NAME!=!MOD_VERSION!>> "!TEMP_CFG!"
 )
 
 :: Only move if both files exist
-if exist "!TEMP_FILE!" (
-    move /y "!TEMP_FILE!" "!VERSION_FILE!" >nul
+if exist "!TEMP_CFG!" (
+    move /y "!TEMP_CFG!" "!VERSION_FILE!" >nul
     if !errorlevel! neq 0 (
         call :HandleError "Failed to update version file"
-        if exist "!TEMP_FILE!" del /f /q "!TEMP_FILE!"
+        if exist "!TEMP_CFG!" del /f /q "!TEMP_CFG!"
         exit /b 1
     )
 )
@@ -683,10 +869,19 @@ set "MOD_NAME=%~3"
 call :Log "Downloading !MOD_NAME! from !URL!"
 call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
 
-powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $webClient = New-Object System.Net.WebClient; $webClient.Headers.Add('User-Agent', 'Mozilla/5.0'); $webClient.DownloadFile('!URL!', '!OUTPUT!') } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
+powershell -Command "$ErrorActionPreference = 'Stop';" ^
+    "try {" ^
+        "$ProgressPreference = 'SilentlyContinue';" ^
+        "$webClient = New-Object System.Net.WebClient;" ^
+        "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
+        "$webClient.DownloadFile('!URL!', '!OUTPUT!')" ^
+    "} catch {" ^
+        "Write-Error (\"Download Failed: $_\");" ^
+        "exit 1" ^
+    "}" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
 
 if !errorlevel! neq 0 (
-    call :HandleError "Failed to download !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_download.log"
+    call :HandleError "Download failed for !MOD_NAME! ([!URL!])" 1 "!LOG_DIR!\!MOD_NAME!_download.log"
     endlocal
     exit /b 1
 )
@@ -724,23 +919,28 @@ set "INSTALL_LOG=!LOG_DIR!\!MOD_NAME!_install.log"
 call :Log "Extracting !MOD_NAME! from !ZIP_FILE! to !EXTRACT_DIR!"
 call :ColorEcho WHITE "* Extracting files..."
 
+:: Silent directory cleanup with full error suppression
 if exist "!MOD_EXTRACT_DIR!" (
-    rd /s /q "!MOD_EXTRACT_DIR!" || (
-        call :HandleError "Failed to remove existing extraction directory"
-        endlocal
-        exit /b 1
-    )
+    rd /s /q "!MOD_EXTRACT_DIR!" >nul 2>&1
 )
 
-powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
+powershell -Command "$ErrorActionPreference = 'Stop';" ^
+    "try {" ^
+        "Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force;" ^
+        "if (-not (Test-Path '!MOD_EXTRACT_DIR!\*')) { throw 'Empty extraction result' }" ^
+    "} catch {" ^
+        "Write-Error (\"Extraction Failed: $_\");" ^
+        "exit 1" ^
+    "}" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
 
 if !errorlevel! neq 0 (
-    call :HandleError "Failed to extract !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_extract.log"
+    call :HandleError "Failed to extract !MOD_NAME! (!ZIP_FILE!)" 1 "!LOG_DIR!\!MOD_NAME!_extract.log"
     endlocal
     exit /b 1
 )
 
-mkdir "!INSTALL_DIR!" 2>nul
+:: Silent directory creation
+mkdir "!INSTALL_DIR!" >nul 2>&1
 if not exist "!INSTALL_DIR!" (
     call :HandleError "Failed to create install directory: !INSTALL_DIR!"
     endlocal
@@ -798,8 +998,7 @@ call :Log "Configuring BepInEx..." "console"
 call :ColorEcho BLUE "► Configuring BepInEx..."
 
 if not exist "!FOUND_PATH!\BepInEx\config" (
-    mkdir "!FOUND_PATH!\BepInEx\config" 2>nul
-    if !errorlevel! neq 0 (
+    mkdir "!FOUND_PATH!\BepInEx\config" 2>nul || (
         call :HandleError "Failed to create BepInEx config directory" 6
         endlocal
         exit /b 6
@@ -939,12 +1138,16 @@ set "MOD_NAME=%~2"
 call :Log "Installing mod: !MOD_AUTHOR!/!MOD_NAME!"
 call :ColorEcho BLUE "► Installing !MOD_NAME!..."
 
-:: Corrected API URL with proper name/author order
-set "MOD_API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
-call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
+:: API endpoint construction
+set "THUNDERSTORE_API_ENDPOINT=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
+call :Log "DEBUG: Calling API URL: !THUNDERSTORE_API_ENDPOINT!"
+
+:: Version tracking variables
+set "MOD_VERSION="
+set "DOWNLOAD_URL="
 
 :: Fetch mod info with improved error handling and JSON depth
-powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get; $jsonResponse = $response | ConvertTo-Json -Depth 10; $jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json' -Encoding UTF8; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
+powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $response = Invoke-RestMethod -Uri '!THUNDERSTORE_API_ENDPOINT!' -Method Get; $jsonResponse = $response | ConvertTo-Json -Depth 10; $jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json' -Encoding UTF8; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
 
 if !errorlevel! neq 0 (
     call :HandleError "Failed to fetch mod info for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_api_error.log"
@@ -953,14 +1156,14 @@ if !errorlevel! neq 0 (
 )
 
 :: Parse version and URL using findstr
-for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "VERSION=%%a"
+for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "MOD_VERSION=%%a"
 for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
 
 :: Trim whitespace from parsed values
-set "VERSION=!VERSION: =!"
+set "MOD_VERSION=!MOD_VERSION: =!"
 set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
-if not defined VERSION (
+if not defined MOD_VERSION (
     call :Log "ERROR: Failed to parse version from API response"
     call :ColorEcho RED "ERROR: Invalid API response for !MOD_NAME!"
     endlocal
@@ -979,22 +1182,22 @@ del "!TEMP_DIR!\!MOD_NAME!_response.json" 2>nul
 del "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>nul
 
 :: Setup paths with logging
-set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!VERSION!.zip"
+set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
 set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
 
 :: Download mod files
 call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
-if !errorlevel! neq 0 goto :ERROR
+if !errorlevel! neq 0 call :HandleError "Download failed for !MOD_NAME!" 1 "!LOG_DIR!\!MOD_NAME!_download.log"
 
 :: Extract and install
 call :ExtractAndInstallMod "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
-if !errorlevel! neq 0 goto :ERROR
+if !errorlevel! neq 0 call :HandleError "Failed to extract !MOD_NAME! (!ZIP_FILE!)" 1 "!LOG_DIR!\!MOD_NAME!_extract.log"
 
 :: Write version information
-call :WriteVersionInfo "!MOD_NAME!" "!VERSION!"
-if !errorlevel! neq 0 goto :ERROR
+call :WriteVersionInfo "!MOD_NAME!" "!MOD_VERSION!"
+if !errorlevel! neq 0 call :HandleError "Failed to write version information for !MOD_NAME!" 6
 
-call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!VERSION!"
+call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION!"
 endlocal
 exit /b 0
 
@@ -1033,12 +1236,12 @@ set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\BepInExPack"
 
 :: Download BepInExPack
 call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "BepInExPack"
-if !errorlevel! neq 0 goto :ERROR
+if !errorlevel! neq 0 call :HandleError "Failed to download BepInExPack" 1 "!LOG_DIR!\BepInExPack_download.log"
 
 :: Extract BepInExPack
 call :Log "Extracting BepInExPack..." "console"
-if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!"
-mkdir "!MOD_EXTRACT_DIR!" 2>nul
+if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!" >nul 2>&1
+mkdir "!MOD_EXTRACT_DIR!" >nul 2>&1
 
 powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\BepInExPack_extract.log"
 
@@ -1059,7 +1262,7 @@ if not exist "!SOURCE_DIR!\BepInEx\*" (
 
 :: Copy the entire BepInEx folder to the game's root
 call :Log "Copying BepInEx files to: !FOUND_PATH!"
-xcopy "!SOURCE_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /H /C /I /Y /Q >>"!LOG_DIR!\BepInExPack_install.log" 2>&1
+xcopy "!SOURCE_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /H /C /I /Y /Q >nul 2>nul
 if !errorlevel! neq 0 (
     call :Log "ERROR: Failed to copy BepInEx files"
     call :ColorEcho RED "ERROR: Installation failed"
@@ -1160,26 +1363,6 @@ exit /b 0
 :: Cleanup and Error Handling
 ::==================================
 
-:: 17. Error handling function
-:ERROR
-setlocal EnableDelayedExpansion
-if "!INSTALL_STATUS!" equ "3" goto :CLEANUP
-
-echo.
-call :ColorEcho RED "X Installation failed!"
-echo.
-call :ColorEcho YELLOW "Troubleshooting steps:"
-echo • Check the logs at: !LOG_DIR!
-echo • Ensure you have a stable internet connection
-echo • Try running the script as administrator
-echo • Make sure the game is not running
-echo • Verify your game files through Steam
-echo.
-call :ColorEcho YELLOW "If the problem persists, please report this issue"
-call :ColorEcho YELLOW "by creating a GitHub issue with the log files."
-endlocal
-goto :CLEANUP
-
 :: 18. Cleanup function
 :CLEANUP
 setlocal EnableDelayedExpansion
@@ -1216,40 +1399,19 @@ call :ColorEcho CYAN "Press any key to exit..."
 pause >nul
 exit /b %INSTALL_STATUS%
 
-:: Error handler
-:: Purpose: Centralized error processing and reporting
-:: Parameters:
-::   %1 - Error message
-::   %2 - Optional error code (default 1)
-::   %3 - Optional log file path
-:: Globals Modified:
-::   INSTALL_STATUS - Set to error code
-::   LOG_FILE - Appends error details
-:: Error Codes:
-::   Always exits the script with the specified error code
-:HandleError
-setlocal EnableDelayedExpansion
-set "ERROR_MESSAGE=%~1"
-set "ERROR_CODE=%~2"
-set "ERROR_LOG=%~3"
-
-:: Default to error code 1 if not specified
-if not defined ERROR_CODE set "ERROR_CODE=1"
-
-:: Log error with timestamp
-call :Log "ERROR [!ERROR_CODE!]: !ERROR_MESSAGE!" "console"
-call :ColorEcho RED "X ERROR [!ERROR_CODE!]: !ERROR_MESSAGE!"
-
-:: Append log file contents if provided
-if defined ERROR_LOG (
-    if exist "!ERROR_LOG!" (
-        call :Log "Additional error details from !ERROR_LOG!:" "console"
-        type "!ERROR_LOG!" >> "!LOG_FILE!"
-    )
-)
-
-:: Set global error state and exit
-endlocal & (
-    set "INSTALL_STATUS=%ERROR_CODE%"
-    exit /b %ERROR_CODE%
-)
+:: ======================================================================
+:: FUNCTION: INITIALIZE_DIRECTORIES
+:: PURPOSE: Creates required temporary directories for installation
+:: PARAMETERS: None
+:: GLOBALS:
+::   TEMP_DIR (creates) - Root temporary directory
+::   LOG_DIR (creates) - Log storage directory
+::   EXTRACT_DIR (creates) - Mod extraction workspace
+:: ERROR CODES:
+::   1 - Directory creation failure
+:: NOTES:
+::   - Creates nested directory structure with error handling
+::   - Required for proper installer operation
+:: ======================================================================
+:INITIALIZE_DIRECTORIES
+:: ... existing directory creation code ...
