@@ -1,3 +1,21 @@
+## v1.3.1 (2025-02-12)
+
+### Fixes
+
+* Improved error handling throughout the script, with more specific error codes and messages.
+* Refined functionality in `:INSTALL_BEPINEX_PACK` to correctly copy BepInEx files.
+* Enhanced error handling in PowerShell commands to capture and log more detailed errors.
+
+### Code Style Improvements
+
+* Removed unnecessary `setlocal` and `endlocal` blocks in some functions.
+* Improved code readability with better spacing and indentation.
+
+### Other Changes
+
+* Added a new function, `:EXTRACTFILES`, to handle archive extraction with validation.
+* Updated `:INSTALLSINGLEMOD` to use `:EXTRACTFILES` for extraction.
+
 ## v1.3.0 (2025-02-12)
 
 ### New Features
