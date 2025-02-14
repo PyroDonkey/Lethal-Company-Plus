@@ -26,8 +26,8 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.3.1"
-set "LAST_MODIFIED=2025-02-12"
+set "VERSION=1.4.0"
+set "LAST_MODIFIED=2025-02-13"
 
 :: Updated error code descriptions with clearer categories
 set "ERROR_CODE_1=General/unexpected error"
@@ -217,16 +217,18 @@ setlocal EnableDelayedExpansion
 call :ColorEcho BLUE "► Beginning mod installation..."
 echo.
 call :ColorEcho WHITE "Installing %MOD_COUNT% mods..."
+set "MOD_INDEX=0"
 
 :: Process each mod in the configured list
 for %%a in ("%MOD_LIST:;=";"%") do (
     for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
         :: Skip core loader to prevent duplicate installation
         if /i not "%%b"=="BepInExPack" (
-            call :InstallSingleMod "%%c" "%%b" || (
+            call :InstallSingleMod "%%c" "%%b" "!MOD_INDEX!" || (
                 endlocal
                 exit /b %errorlevel%
             )
+            set /a MOD_INDEX+=1
         )
     )
 )
@@ -239,6 +241,7 @@ exit /b 0
 :: PARAMETERS:
 ::   %1 - MOD_AUTHOR (Thunderstore namespace)
 ::   %2 - MOD_NAME (Thunderstore package name)
+::   %3 - MOD_INDEX (Installation order index)
 :: GLOBALS: MOD_VERSION, DOWNLOAD_URL, ZIP_FILE, MOD_EXTRACT_DIR, INSTALL_DIR
 :: ERROR CODES: 2,8,9,10 - Various installation failures
 :: ======================================================================
@@ -246,6 +249,11 @@ exit /b 0
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
     set "MOD_NAME=%~2"
+    set "MOD_INDEX=%~3"
+    
+    :: Pad index with leading zero for sorting
+    set "MOD_INDEX_PADDED=0!MOD_INDEX!"
+    set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
 
     :: Construct Thunderstore API URL using author/package naming convention
     set "THUNDERSTORE_API_ENDPOINT=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
@@ -300,9 +308,9 @@ exit /b 0
     :: Non-fatal error allows continuation with other mods
     if !errorlevel! neq 0 call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
 
-    :: Set up standardized directory paths
+    :: Set up standardized directory paths with load order prefix
     set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
-    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_NAME!"
+    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
     set "INSTALL_LOG=!LOG_DIR!\!MOD_NAME!_install.log"
 
     call :ExtractFiles "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
