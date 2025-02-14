@@ -16,6 +16,8 @@ set "LOG_DIR=%TEMP_DIR%\logs"
 set "LOG_FILE=%LOG_DIR%\debug.log" 
 set "EXTRACT_DIR=%TEMP_DIR%\extracted"
 set "MOD_COUNT=0"
+
+:: ANSI color control
 set "ESC="
 set "GREEN="
 set "YELLOW="
@@ -29,7 +31,7 @@ set "RESET="
 set "VERSION=1.4.0"
 set "LAST_MODIFIED=2025-02-13"
 
-:: Updated error code descriptions with clearer categories
+:: Error code descriptions
 set "ERROR_CODE_1=General/unexpected error"
 set "ERROR_CODE_2=Network communication failure"
 set "ERROR_CODE_3=File/directory not found"
@@ -57,14 +59,16 @@ set "SOURCE_DIR="
 set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
 :: =================================
-:: USER CONFIRMATION DIALOG
+:: User Confirmation Dialog
 :: =================================
+
 :: ======================================================================
 :: FUNCTION: CHECK_AND_REQUEST_ELEVATION
-:: PURPOSE: Ensure script runs with admin privileges
-:: PARAMETERS: None
-:: GLOBALS: INSTALL_STATUS (sets error state if elevation fails)
-:: ERROR CODES: 12 - Elevation request failed
+:: PURPOSE: Requests administrator privileges for installation
+:: GLOBALS MODIFIED:
+::   - INSTALL_STATUS (sets on elevation failure)
+:: ERROR CODES:
+::   12 - Elevation request failed
 :: ======================================================================
 :CHECK_AND_REQUEST_ELEVATION
     WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
@@ -85,11 +89,6 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
 :: ======================================================================
 :: FUNCTION: CONTINUE_INITIALIZATION
-:: PURPOSE: Post-elevation environment setup
-:: PARAMETERS: None
-:: GLOBALS: TEMP_DIR, LOG_DIR, EXTRACT_DIR (creates directories)
-:: ERROR CODES: 3 - Directory creation failure
-:: NOTES: Creates required directories and initializes logging
 :: ======================================================================
 :CONTINUE_INITIALIZATION
     call :CREATE_DIRECTORY "%TEMP_DIR%" || (
@@ -97,11 +96,13 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         set INSTALL_STATUS = 3
         goto :CLEANUP
     )
+    
     call :CREATE_DIRECTORY "%LOG_DIR%" || (
         call :HandleError "Failed to create log directory: %LOG_DIR%" 3 
         set INSTALL_STATUS=3
         goto :CLEANUP
     )
+    
     call :CREATE_DIRECTORY "%EXTRACT_DIR%" || (
         call :HandleError "Failed to create extraction directory: %EXTRACT_DIR%" 3
         set INSTALL_STATUS=3
@@ -157,9 +158,9 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         powershell Set-ExecutionPolicy RemoteSigned -Scope Process >nul 2>&1
     )
 
-::==================================
-:: MAIN INSTALLATION FLOW
-::==================================
+:: =================================
+:: Main Installation Flow
+:: =================================
 :START_INSTALLATION
     :: Core installation sequence
     call :InitializeEnvironment || (
@@ -207,33 +208,29 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
 :: ======================================================================
 :: FUNCTION: INSTALL_ALL_MODS
-:: PURPOSE: Installs all mods from MOD_LIST excluding BepInExPack
-:: PARAMETERS: None
-:: GLOBALS: MOD_COUNT (uses), MOD_LIST (reads)
-:: ERROR CODES: 14 - Mod installation failure
 :: ======================================================================
 :INSTALL_ALL_MODS
-setlocal EnableDelayedExpansion
-call :ColorEcho BLUE "► Beginning mod installation..."
-echo.
-call :ColorEcho WHITE "Installing %MOD_COUNT% mods..."
-set "MOD_INDEX=0"
+    setlocal EnableDelayedExpansion
+    call :ColorEcho BLUE "► Beginning mod installation..."
+    echo.
+    call :ColorEcho WHITE "Installing %MOD_COUNT% mods..."
+    set "MOD_INDEX=0"
 
-:: Process each mod in the configured list
-for %%a in ("%MOD_LIST:;=";"%") do (
-    for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
-        :: Skip core loader to prevent duplicate installation
-        if /i not "%%b"=="BepInExPack" (
-            call :InstallSingleMod "%%c" "%%b" "!MOD_INDEX!" || (
-                endlocal
-                exit /b %errorlevel%
+    :: Process each mod in the configured list
+    for %%a in ("%MOD_LIST:;=";"%") do (
+        for /f "tokens=1,2 delims=," %%b in ("%%~a") do (
+            :: Skip core loader to prevent duplicate installation
+            if /i not "%%b"=="BepInExPack" (
+                call :InstallSingleMod "%%c" "%%b" "!MOD_INDEX!" || (
+                    endlocal
+                    exit /b %errorlevel%
+                )
+                set /a MOD_INDEX+=1
             )
-            set /a MOD_INDEX+=1
         )
     )
-)
-endlocal
-exit /b 0
+    endlocal
+    exit /b 0
 
 :: ======================================================================
 :: FUNCTION: INSTALLSINGLEMOD
@@ -393,9 +390,12 @@ exit /b 0
 :: ======================================================================
 :: FUNCTION: CREATE_DIRECTORY
 :: PURPOSE: Safely create directories with error handling
-:: PARAMETERS: %1 - Directory path to create
-:: GLOBALS: LOG_FILE (appends creation attempts)
-:: ERROR CODES: 3 - Directory creation failure
+:: PARAMETERS:
+::   %1 - Directory path to create
+:: GLOBALS USED:
+::   - LOG_FILE (appends creation attempts)
+:: ERROR CODES:
+::   3 - Directory creation failure
 :: ======================================================================
 :CREATE_DIRECTORY
     setlocal
@@ -454,8 +454,11 @@ exit /b 0
 ::   %1 - Error description
 ::   %2 - Error category code
 ::   %3 - Optional log file path
-:: GLOBALS: INSTALL_STATUS (sets global error state), LOG_FILE (appends)
-:: ERROR CODES: Propagates received error code
+:: GLOBALS MODIFIED:
+::   - INSTALL_STATUS (sets global error state)
+::   - LOG_FILE (appends error details)
+:: ERROR CODES: 
+::   Propagates received error code
 :: ======================================================================
 :HandleError
     setlocal EnableDelayedExpansion
@@ -625,6 +628,7 @@ exit /b 0
     echo Enter your Lethal Company path (containing Lethal Company.exe):
     set /p "FOUND_PATH=Path: "
     if not defined FOUND_PATH goto :ManualInput
+    call :Log "Raw user input: '!FOUND_PATH!'"
 
 :: ======================================================================
 :: FUNCTION: ValidateGamePath
@@ -635,12 +639,20 @@ exit /b 0
 :: ======================================================================
 :ValidateGamePath
     set "FOUND_PATH=!FOUND_PATH:"=!"
-    if "!FOUND_PATH:~-1!" == "\" set "FOUND_PATH=!FOUND_PATH:~0,-1!"
+    if "!FOUND_PATH!" neq "%~1" (
+        call :Log "Removed quotes from path: '!FOUND_PATH!'"
+    )
+    if "!FOUND_PATH:~-1!" == "\" (
+        set "FOUND_PATH=!FOUND_PATH:~0,-1!"
+        call :Log "Trimmed trailing slash: '!FOUND_PATH!'"
+    )
+    call :Log "Checking path existence: '!FOUND_PATH!\Lethal Company.exe'"
     if not exist "!FOUND_PATH!\Lethal Company.exe" (
-        call :Log "Invalid path: !FOUND_PATH!"
+        call :Log "Path validation failed - LethalCompany.exe not found" "console"
         call :HandleError "Lethal Company.exe not found at path" 13
         goto :ManualInput
     )
+    call :Log "Path validation succeeded - LethalCompany.exe found"
     call :ColorEcho GREEN "✓ Lethal Company install located at: !FOUND_PATH!"
     call :Log "Valid game path found: !FOUND_PATH!"
     endlocal & set "FOUND_PATH=%FOUND_PATH%"
@@ -1151,6 +1163,14 @@ exit /b 0
         )
     )
 
+    :: Clean up all log files except debug.log
+    for %%a in ("%LOG_DIR%\*.log") do (
+        set "file_name=%%~nxa"
+        if /i not "!file_name!"=="debug.log" (
+            del /f /q "%%a" 2>nul
+        )
+    )
+
     endlocal
 
     echo.
@@ -1169,18 +1189,20 @@ exit /b 0
 :: ======================================================================
 :DownloadModlist
     setlocal EnableDelayedExpansion
+    :: Delete existing modlist before download
+    del "%TEMP_DIR%\modlist.ini" 2>nul
     :: Use Invoke-WebRequest to get content directly
     powershell -Command "$webClient = New-Object System.Net.WebClient;" ^
         "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
         "try { " ^
             "$content = $webClient.DownloadString(" ^
-                "'https://raw.githubusercontent.com/PyroDonkey/Lethal-Company-Plus/main/Modlist/modlist.ini'" ^
-            ") " ^
+                "'https://raw.githubusercontent.com/PyroDonkey/Lethal-Company-Plus/refs/heads/main/Modlist/modlist.ini'" ^
+            "); " ^
+            "[System.IO.File]::WriteAllText('%TEMP_DIR%\\modlist.ini', $content)" ^
         "} catch { " ^
             "Write-Error $_.Exception.Message; " ^
             "exit 1 " ^
         "}; " ^
-        "$content | Out-File '%TEMP_DIR%\\modlist.ini' -Encoding UTF8" ^
         2>"%LOG_DIR%\modlist_download.log"
 
     if !errorlevel! neq 0 (

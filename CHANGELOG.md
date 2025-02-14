@@ -1,3 +1,58 @@
+## v1.4.1 (2025-02-13)
+
+### Fixes
+
+* Corrected mod names in `modlist.ini` to match their actual names on Thunderstore.
+* Fixed the download URL for `modlist.ini` to use the `refs/heads/main` path.
+
+### Refactoring
+
+* Added cleanup of log files in the `:CLEANUP` function to keep the temporary directory tidy.
+
+### Other Changes
+
+* Removed the unused `TEMP_CFG` variable from the global configuration.
+
+## v1.4.0 (2025-02-13)
+
+### New Features
+
+* Enforce mod installation order with indexed directories. This ensures that mods are installed in a specific sequence, which can be important for compatibility and dependency management.
+
+### Changes
+
+* Updated the mod list with new and updated mods:
+    * FixRPCLag
+    * Matty_Fixes
+    * LethalConfig
+    * VertexLibrary
+    * NilsHUD
+    * AccurateStaminaDisplay
+    * MoonPriceDisplay
+    * ShowCapacity
+    * HideChat
+    * SpiderPositionFix
+    * CullFactory
+    * IntroTweaks
+    * EnemySoundFixes
+    * JetpackFixes
+    * MeleeFixes
+    * RestoreMapper
+    * MaskFixes
+    * BarberFixes
+    * WeedKillerFixes
+    * Chameleon
+    * RevisitStingers
+    * UpturnedVariety
+    * ShipLoot
+    * CoilHeadStare
+    * FireExitFlip
+    * SuitSaver
+    * OpenBodyCams
+    * AlwaysHearActiveWalkies
+    * LethalRichPresence
+
+
 ## v1.3.1 (2025-02-12)
 
 ### Fixes

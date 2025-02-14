@@ -11,30 +11,10 @@ A simple, self-installing modpack for Lethal Company that focuses on quality of 
 - In-game configuration: Customize mod settings without leaving the game
 
 ## Included Mods
-* BepInExPack (Core Mod Loader)
-* LethalConfig
-* VertexLibrary
-* GeneralImprovements
-* EnemySoundFixes
-* BarberFixes
-* JetpackFixes
-* MeleeFixes
-* WeedKillerFixes
-* CullFactory
-* HideChat
-* FixRPCLag
-* MoonPriceDisplay
-* RankFix
-* CoilHeadStare
-* NilsHUD
-* AccurateStaminaDisplay
-* LethalRichPresence
-* AlwaysHearActiveWalkies
-* ShipLoot
-* RuntimeIcons
+* See [modlist.ini](https://github.com/PyroDonkey/Lethal-Company-Plus/blob/main/Modlist/modlist.ini) for a full list of included mods.
 
 ## Installation
-1. Download `LCPlus-Installer.bat` from the [Releases]([link](https://github.com/PyroDonkey/Lethal-Company-Plus/releases)) page
+1. Download `LCPlus-Installer.bat` from the [Releases](https://github.com/PyroDonkey/Lethal-Company-Plus/releases) page
 2. Run as administrator
 3. Follow the prompts
 4. Play!
