@@ -318,19 +318,26 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         exit /b 9
     )
 
-    :: Create plugin directory if missing
+    :: Flexible directory detection with fallback
+    set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!\plugins\!MOD_NAME!"
+    if not exist "!SOURCE_PLUGIN_DIR!" set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!\plugins"
+    if not exist "!SOURCE_PLUGIN_DIR!" set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!"
+
+    :: Create installation directory
     if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!"
-    
-    :: Robocopy parameters:
-    :: /E - copy subdirectories including empty ones
-    :: /COPYALL - copy all file info
-    :: /R:0 - no retries on failed copies
-    :: /W:0 - no wait between retries
-    robocopy "!MOD_EXTRACT_DIR!" "!INSTALL_DIR!" /E /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\!MOD_NAME!_copy.log" >nul
-    
-    :: Robocopy returns 0-7 for success, 8+ for errors
+
+    :: Copy core plugin files
+    robocopy "!SOURCE_PLUGIN_DIR!" "!INSTALL_DIR!" *.* /S /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\!MOD_NAME!_copy.log" >nul
     if !errorlevel! GEQ 8 (
-        call :HandleError "Failed to copy files for !MOD_NAME!" 8 "!LOG_DIR!\!MOD_NAME!_copy.log"
+        call :HandleError "Failed to copy plugin files for !MOD_NAME!" 8 "!LOG_DIR!\!MOD_NAME!_copy.log"
+        endlocal
+        exit /b 8
+    )
+
+    :: Copy root files (metadata, assets) excluding plugins directory and DLLs
+    robocopy "!MOD_EXTRACT_DIR!" "!INSTALL_DIR!" *.* /S /XD plugins /XF *.dll /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\!MOD_NAME!_root_copy.log" >nul
+    if !errorlevel! GEQ 8 (
+        call :HandleError "Failed to copy root files for !MOD_NAME!" 8 "!LOG_DIR!\!MOD_NAME!_root_copy.log"
         endlocal
         exit /b 8
     )
