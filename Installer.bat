@@ -593,64 +593,93 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 :: GLOBALS MODIFIED:
 ::   - FOUND_PATH (sets on success)
 :: ERROR CODES:
-::   13 - Game not found or invalid path
+::   0 - Success
+::   1 - Game not found
+::   2 - Invalid path
 :: ======================================================================
 :LocateGame
     setlocal EnableDelayedExpansion
-    call :Log "Starting enhanced game location detection..."
-    call :ColorEcho BLUE "► Locating Lethal Company installation..."
+    set "FOUND_PATH="
+    
+    call :Log "Starting game location detection..."
+    call :ColorEcho BLUE "► Searching for Lethal Company installation..."
+    echo.
 
-    :: Initialize registry search paths
+    :: Define registry paths to search
     set "REGISTRY_PATHS=HKCU\Software\Valve\Steam HKLM\Software\Valve\Steam HKLM\Software\Wow6432Node\Valve\Steam HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 1966720"
 
     :: Try registry locations first
-    for %%R in (%REGISTRY_PATHS%) do (
+    for %%R in (!REGISTRY_PATHS!) do (
         call :Log "Checking registry: %%R"
-        reg query "%%R" /v "InstallPath" 2>nul | findstr /i "InstallPath" >nul && (
+        reg query "%%R" /v "InstallPath" >nul 2>&1 && (
             for /f "tokens=2,*" %%A in ('reg query "%%R" /v "InstallPath" 2^>nul') do (
                 set "STEAM_PATH=%%B"
-                call :Log "Found Steam path: !STEAM_PATH!"
-                call :ValidateGamePath "!STEAM_PATH!\steamapps\common\Lethal Company" && goto :FoundGame
+                call :Log "Found Steam path in registry: !STEAM_PATH!"
+                call :ValidateGamePath "!STEAM_PATH!\steamapps\common\Lethal Company" && goto :LocateGame_Found
             )
+        ) || (
+            call :Log "Registry key not found: %%R"
         )
     )
 
-    :: Check SteamApps environment variable
-    if defined SteamApps (
-        call :Log "Checking SteamApps environment variable: !SteamApps!"
-        call :ValidateGamePath "!SteamApps!\common\Lethal Company" && goto :FoundGame
-    )
-
-    :: Search Steam library folders if Steam is found
+    :: Check Steam library folders
     if defined STEAM_PATH (
-        if exist "!STEAM_PATH!\steamapps\libraryfolders.vdf" (
-            call :Log "Searching Steam library folders..."
-            powershell -Command "$ErrorActionPreference = 'Stop'; try {" ^
-                "$content = Get-Content '!STEAM_PATH!\steamapps\libraryfolders.vdf';" ^
-                "$paths = $content | Select-String '^\s*\"path\"\s*\"([^\"]+)\"' |" ^
-                "ForEach-Object { $_.Matches.Groups[1].Value };" ^
-                "foreach ($path in $paths) {" ^
-                    "$gamePath = Join-Path $path 'steamapps\common\Lethal Company';" ^
-                    "if (Test-Path (Join-Path $gamePath 'Lethal Company.exe')) {" ^
-                        "Write-Output $gamePath; exit 0" ^
-                    "}" ^
-                "}" ^
-            "} catch { exit 1 }" > "!TEMP_DIR!\steam_paths.txt"
+        set "VDF_PATH=!STEAM_PATH!\steamapps\libraryfolders.vdf"
+        
+        if exist "!VDF_PATH!" (
+            call :Log "Found Steam library configuration at: !VDF_PATH!"
             
-            if !errorlevel! equ 0 (
-                for /f "usebackq delims=" %%P in ("!TEMP_DIR!\steam_paths.txt") do (
-                    call :ValidateGamePath "%%P" && goto :FoundGame
+            :: Create PowerShell script for library search
+            set "PS_SCRIPT=%TEMP%\find_lethal_company.ps1"
+            (
+                echo $ErrorActionPreference = 'Stop'
+                echo try {
+                echo     $vdfPath = '!VDF_PATH!' -replace '\\', '\\'
+                echo     $content = Get-Content -Path $vdfPath -Raw
+                echo     $paths = @()
+                echo     
+                echo     # Search both old and new VDF formats
+                echo     $paths += [regex]::Matches($content, '(?m)"path"\s+"([^"]+)"') ^| ForEach-Object { $_.Groups[1].Value }
+                echo     $paths += [regex]::Matches($content, '"[0-9]+"\s+{[^}]*"path"\s+"([^"]+)"') ^| ForEach-Object { $_.Groups[1].Value }
+                echo     $paths = $paths ^| Select-Object -Unique
+                echo     
+                echo     foreach ($path in $paths^) {
+                echo         $gamePath = Join-Path $path 'steamapps\common\Lethal Company'
+                echo         $exePath = Join-Path $gamePath 'Lethal Company.exe'
+                echo         if (Test-Path $exePath -PathType Leaf^) {
+                echo             Write-Output $gamePath
+                echo             exit 0
+                echo         }
+                echo     }
+                echo } catch {
+                echo     Write-Error $_.Exception.Message
+                echo     exit 1
+                echo }
+                echo exit 2
+            ) > "!PS_SCRIPT!"
+
+            call :Log "Searching Steam libraries..."
+            powershell -NoProfile -ExecutionPolicy Bypass -File "!PS_SCRIPT!" > "%TEMP%\steam_paths.txt" 2>"%TEMP%\steam_errors.txt"
+            set "PS_EXIT_CODE=!ERRORLEVEL!"
+
+            if !PS_EXIT_CODE! equ 0 (
+                for /f "usebackq delims=" %%P in ("%TEMP%\steam_paths.txt") do (
+                    call :ValidateGamePath "%%P" && goto :LocateGame_Found
                 )
             )
+
+            :: Cleanup temporary files
+            del /f /q "!PS_SCRIPT!" 2>nul
+            del /f /q "%TEMP%\steam_paths.txt" 2>nul
+            del /f /q "%TEMP%\steam_errors.txt" 2>nul
         )
     )
 
     :: Search common installation drives
     for %%D in (C D E F G) do (
         if exist "%%D:\" (
-            call :Log "Searching drive %%D: for common installation paths..."
+            call :Log "Searching drive %%D:..."
             
-            :: Common Steam installation paths
             for %%P in (
                 "\Program Files\Steam\steamapps\common\Lethal Company"
                 "\Program Files (x86)\Steam\steamapps\common\Lethal Company"
@@ -658,29 +687,41 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
                 "\SteamLibrary\steamapps\common\Lethal Company"
                 "\Games\Steam\steamapps\common\Lethal Company"
             ) do (
-                call :ValidateGamePath "%%D:%%P" && goto :FoundGame
+                call :ValidateGamePath "%%D:%%P" && goto :LocateGame_Found
             )
         )
     )
 
-    :: If all automatic detection fails, ask user
-    :ManualInput
-    call :ColorEcho YELLOW "Could not auto-detect installation."
+    :: Manual input if automatic detection fails
+    :LocateGame_ManualInput
+    call :ColorEcho YELLOW "Unable to automatically detect Lethal Company installation."
     echo.
-    echo Enter your Lethal Company installation path (containing Lethal Company.exe):
+    echo Please enter the full path to your Lethal Company installation
+    echo (The folder containing 'Lethal Company.exe'^):
+    echo.
     set /p "USER_PATH=Path: "
     
-    if not defined USER_PATH goto :ManualInput
-    call :ValidateGamePath "!USER_PATH!" && goto :FoundGame
+    if not defined USER_PATH (
+        call :ColorEcho RED "No path entered."
+        goto :LocateGame_ManualInput
+    )
     
-    call :ColorEcho RED "Invalid path. Game executable not found."
-    goto :ManualInput
+    call :ValidateGamePath "!USER_PATH!" && goto :LocateGame_Found
 
-    :FoundGame
-    call :ColorEcho GREEN "✓ Lethal Company installation located at: !FOUND_PATH!"
-    call :Log "Valid game path found: !FOUND_PATH!"
+    call :ColorEcho RED "Invalid path. Lethal Company.exe not found."
+    echo.
+    goto :LocateGame_ManualInput
+
+    :LocateGame_Found
+    call :ColorEcho GREEN "✓ Lethal Company found at: !FOUND_PATH!"
+    call :Log "Successfully located game at: !FOUND_PATH!"
     endlocal & set "FOUND_PATH=%FOUND_PATH%"
     exit /b 0
+
+    :LocateGame_Error
+    call :Log "Failed to locate game installation"
+    endlocal
+    exit /b 1
 
 :: ======================================================================
 :: FUNCTION: VALIDATEGAMEPATH
@@ -910,6 +951,39 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     exit /b 0
 
 :: ======================================================================
+:: FUNCTION: DownloadFile
+:: PURPOSE: Core file download logic with error handling
+:: PARAMETERS:
+::   %1 - Source URL
+::   %2 - Output file path
+:: ERROR CODES:
+::   2 - Download failure
+:: ======================================================================
+:DownloadFile
+    setlocal EnableDelayedExpansion
+    set "URL=%~1"
+    set "OUTPUT=%~2"
+
+    powershell -Command "$ErrorActionPreference = 'Stop';" ^
+        "try {" ^
+            "$ProgressPreference = 'SilentlyContinue';" ^
+            "$webClient = New-Object System.Net.WebClient;" ^
+            "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
+            "$webClient.DownloadFile('!URL!', '!OUTPUT!')" ^
+        "} catch {" ^
+            "Write-Error (\"Download Failed: $_\");" ^
+            "exit 1" ^
+        "}"
+    
+    if !errorlevel! neq 0 (
+        endlocal
+        exit /b 2
+    )
+    
+    endlocal
+    exit /b 0
+
+:: ======================================================================
 :: FUNCTION: DownloadMod
 :: ======================================================================
 :DownloadMod
@@ -921,34 +995,27 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     call :Log "Downloading !MOD_NAME! from !URL!"
     call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
 
-    powershell -Command "$ErrorActionPreference = 'Stop';" ^
-        "try {" ^
-            "$ProgressPreference = 'SilentlyContinue';" ^
-            "$webClient = New-Object System.Net.WebClient;" ^
-            "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
-            "$webClient.DownloadFile('!URL!', '!OUTPUT!')" ^
-        "} catch {" ^
-            "Write-Error (\"Download Failed: $_\");" ^
-            "exit 1" ^
-        "}" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
+    :: Use new centralized DownloadFile function
+    call :DownloadFile "!URL!" "!OUTPUT!" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
 
-    :: Verify downloaded file exists and has content
+    :: Check for download errors
     if !errorlevel! neq 0 (
         call :HandleError "Download failed for !MOD_NAME! ([!URL!])" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
         endlocal
         exit /b 2
     )
 
+    :: Verify downloaded file exists and has content
     if not exist "!OUTPUT!" (
         call :HandleError "Download file not found for !MOD_NAME!"
         endlocal
         exit /b 1
     )
-    :: Zero-byte file check to detect failed downloads that didn't trigger errors
+    
+    :: Zero-byte file check
     for %%A in ("!OUTPUT!") do (
         if %%~zA LEQ 0 (
             call :HandleError "Empty download file for !MOD_NAME!" 2
-            call :ColorEcho RED "ERROR: Download verification failed for !MOD_NAME!"
             del "!OUTPUT!" 2>nul
             endlocal
             exit /b 2
@@ -967,6 +1034,7 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     call :Log "Configuring BepInEx..." "console"
     call :ColorEcho BLUE "► Configuring BepInEx..."
 
+    :: Create config directory if missing
     if not exist "!FOUND_PATH!\BepInEx\config" (
         mkdir "!FOUND_PATH!\BepInEx\config" 2>nul || (
             call :HandleError "Failed to create BepInEx config directory" 6
@@ -976,124 +1044,113 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     )
 
     set "BEPINEX_CFG=!FOUND_PATH!\BepInEx\config\BepInEx.cfg"
-
-    :: Create or update configuration
-    if not exist "!BEPINEX_CFG!" (
-        call :CreateDefaultBepInExConfig
-        if !errorlevel! neq 0 (
-            endlocal
-            exit /b 1
-        )
+    
+    :: Determine configuration mode
+    if exist "!BEPINEX_CFG!" (
+        call :ConfigureBepInExInternal 0
     ) else (
-        call :UpdateBepInExConfig
-        if !errorlevel! neq 0 (
-            endlocal
-            exit /b 1
-        )
+        call :ConfigureBepInExInternal 1
+    )
+    if !errorlevel! neq 0 (
+        endlocal
+        exit /b 1
     )
 
     call :ColorEcho GREEN "✓ BepInEx configuration complete"
     endlocal
     exit /b 0
 
-:: 11. Create default BepInEx configuration
-:CreateDefaultBepInExConfig
+:: ======================================================================
+:: FUNCTION: ConfigureBepInExInternal
+:: PURPOSE: Core configuration logic with mode selection
+:: PARAMETERS: %1 - CREATE_DEFAULT (1=true/0=false)
+:: ======================================================================
+:ConfigureBepInExInternal
     setlocal EnableDelayedExpansion
-    call :Log "Creating default BepInEx configuration..."
-
-    (
-        echo [Logging.Console]
-        echo Enabled = true
-        echo.
-        echo [Logging.Disk]
-        echo WriteUnityLog = false
-        echo.
-        echo [Paths]
-        echo BepInExRootPath = BepInEx
-        echo.
-        echo [Preloader.Entrypoint]
-        echo Assembly = BepInEx.Preloader.dll
-        echo.
-        echo [Loading]
-        echo LoadPlugins = true
-    ) > "!BEPINEX_CFG!" 2>"!LOG_DIR!\bepinex_config_create.log"
-
-    if !errorlevel! neq 0 (
-        call :HandleError "BepInEx config creation failed" 6
-        endlocal
-        exit /b 6
-    )
-
-    call :Log "Created default BepInEx configuration"
-    endlocal
-    exit /b 0
-
-:: 12. Update existing BepInEx configuration
-:UpdateBepInExConfig
-    setlocal EnableDelayedExpansion
+    set "CREATE_DEFAULT=%~1"
     set "TEMP_CFG=!TEMP_DIR!\BepInEx.cfg.tmp"
 
-    call :Log "Updating BepInEx configuration..."
-
-    set "IN_LOGGING_CONSOLE=0"
-    set "IN_LOADING=0"
-    set "CONSOLE_FOUND=0"
-    set "LOADING_FOUND=0"
-
-    (for /f "usebackq delims=" %%a in ("!BEPINEX_CFG!") do (
-        set "LINE=%%a"
-        :: Detect config sections without using findstr
-        if "!LINE!"=="[Logging.Console]" (
-            set "IN_LOGGING_CONSOLE=1"
-            set "CONSOLE_FOUND=1"
-            echo !LINE!
-        ) else if "!LINE!"=="[Loading]" (
-            set "IN_LOADING=1"
-            set "LOADING_FOUND=1"
-            echo !LINE!
-        ) else if "!LINE!"=="" (
-            set "IN_LOGGING_CONSOLE=0"
-            set "IN_LOADING=0"
+    if !CREATE_DEFAULT! equ 1 (
+        call :Log "Creating default configuration..."
+        (
+            echo [Logging.Console]
+            echo Enabled = true
             echo.
-        ) else (
-            if "!IN_LOGGING_CONSOLE!"=="1" (
-                if "!LINE:~0,8!"=="Enabled " (
-                    echo Enabled = true
-                ) else (
-                    echo !LINE!
-                )
-            ) else if "!IN_LOADING!"=="1" (
-                if "!LINE:~0,12!"=="LoadPlugins " (
-                    echo LoadPlugins = true
-                ) else (
-                    echo !LINE!
-                )
-            ) else (
+            echo [Logging.Disk]
+            echo WriteUnityLog = false
+            echo.
+            echo [Paths]
+            echo BepInExRootPath = BepInEx
+            echo.
+            echo [Preloader.Entrypoint]
+            echo Assembly = BepInEx.Preloader.dll
+            echo.
+            echo [Loading]
+            echo LoadPlugins = true
+        ) > "!BEPINEX_CFG!" 2>"!LOG_DIR!\bepinex_config.log"
+        
+        if !errorlevel! neq 0 (
+            call :HandleError "Config creation failed" 6
+            endlocal
+            exit /b 6
+        )
+    ) else (
+        call :Log "Updating existing configuration..."
+        set "IN_LOGGING_CONSOLE=0"
+        set "IN_LOADING=0"
+        set "CONSOLE_FOUND=0"
+        set "LOADING_FOUND=0"
+
+        (for /f "usebackq delims=" %%a in ("!BEPINEX_CFG!") do (
+            set "LINE=%%a"
+            if "!LINE!"=="[Logging.Console]" (
+                set "IN_LOGGING_CONSOLE=1"
+                set "CONSOLE_FOUND=1"
                 echo !LINE!
+            ) else if "!LINE!"=="[Loading]" (
+                set "IN_LOADING=1"
+                set "LOADING_FOUND=1"
+                echo !LINE!
+            ) else if "!LINE!"=="" (
+                set "IN_LOGGING_CONSOLE=0"
+                set "IN_LOADING=0"
+                echo.
+            ) else (
+                if !IN_LOGGING_CONSOLE! equ 1 (
+                    if "!LINE:~0,8!"=="Enabled " (
+                        echo Enabled = true
+                    ) else (
+                        echo !LINE!
+                    )
+                ) else if !IN_LOADING! equ 1 (
+                    if "!LINE:~0,12!"=="LoadPlugins " (
+                        echo LoadPlugins = true
+                    ) else (
+                        echo !LINE!
+                    )
+                ) else (
+                    echo !LINE!
+                )
             )
         )
+        if !CONSOLE_FOUND! equ 0 (
+            echo.
+            echo [Logging.Console]
+            echo Enabled = true
+        )
+        if !LOADING_FOUND! equ 0 (
+            echo.
+            echo [Loading]
+            echo LoadPlugins = true
+        )) > "!TEMP_CFG!"
+
+        move /y "!TEMP_CFG!" "!BEPINEX_CFG!" >nul
+        if !errorlevel! neq 0 (
+            call :HandleError "Config update failed" 6
+            endlocal
+            exit /b 6
+        )
     )
-
-    if !CONSOLE_FOUND!==0 (
-        echo.
-        echo [Logging.Console]
-        echo Enabled = true
-    )
-
-    if !LOADING_FOUND!==0 (
-        echo.
-        echo [Loading]
-        echo LoadPlugins = true
-    )) > "!TEMP_CFG!" 2>"!LOG_DIR!\bepinex_config_update.log"
-
-    move /y "!TEMP_CFG!" "!BEPINEX_CFG!" >nul
-    if !errorlevel! neq 0 (
-        call :HandleError "BepInEx config update failed" 6
-        endlocal
-        exit /b 6
-    )
-
-    call :Log "Updated BepInEx configuration"
     endlocal
     exit /b 0
 
@@ -1139,15 +1196,35 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
     :: Setup paths
     set "ZIP_FILE=!TEMP_DIR!\BepInExPack_v!VERSION!.zip"
-    set "EXTRACT_ROOT=!EXTRACT_DIR!\BepInEx"  :: Where BepInEx will be extracted TO
-    set "SOURCE_DIR=!EXTRACT_ROOT!\BepInExPack"  :: Where the extracted BepInEx files ARE
+    set "EXTRACT_ROOT=!EXTRACT_DIR!\BepInEx"
+    set "SOURCE_DIR=!EXTRACT_ROOT!\BepInExPack"
 
-    :: Download BepInExPack
-    call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "BepInExPack"
+    :: Download BepInExPack using centralized function
+    call :Log "Downloading BepInExPack from: !DOWNLOAD_URL!"
+    call :ColorEcho WHITE "* Downloading BepInExPack..."
+    call :DownloadFile "!DOWNLOAD_URL!" "!ZIP_FILE!" 2>"!LOG_DIR!\BepInExPack_download.log"
+
     if !errorlevel! neq 0 (
         call :HandleError "Failed to download BepInExPack" 2 "!LOG_DIR!\BepInExPack_download.log"
         endlocal
         exit /b 2
+    )
+
+    :: Verify downloaded file
+    if not exist "!ZIP_FILE!" (
+        call :HandleError "BepInExPack download file not found" 3
+        endlocal
+        exit /b 3
+    )
+
+    :: Zero-byte file check
+    for %%A in ("!ZIP_FILE!") do (
+        if %%~zA LEQ 0 (
+            call :HandleError "Empty BepInExPack download file" 2
+            del "!ZIP_FILE!" 2>nul
+            endlocal
+            exit /b 2
+        )
     )
 
     :: Extract BepInExPack using :ExtractFiles
