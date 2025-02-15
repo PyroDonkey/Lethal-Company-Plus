@@ -28,7 +28,7 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.6.1"
+set "VERSION=1.6.2"
 set "LAST_MODIFIED=2025-02-15"
 
 :: Error code descriptions
@@ -347,9 +347,23 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
         :: Get just filename without path
         for %%A in ("%%F") do set "FILE_NAME=%%~nxA"
         
-        :: Copy file to installation directory using basic copy command
-        call :Log "Copying !FILE_NAME! to !INSTALL_DIR!"
-        copy /Y "%%F" "!INSTALL_DIR!\" >nul
+        :: Patchers folder exception handling
+        set "DEST_PATH=!INSTALL_DIR!\!FILE_NAME!"
+        echo "%%F" | findstr /i "\\BepInEx\\Patchers\\" >nul
+        if !errorlevel! equ 0 (
+            set "PATCHERS_DIR=!FOUND_PATH!\BepInEx\Patchers"
+            call :CREATE_DIRECTORY "!PATCHERS_DIR!" || (
+                call :HandleError "Failed to create Patchers directory" 8
+                endlocal
+                exit /b 8
+            )
+            set "DEST_PATH=!PATCHERS_DIR!\!FILE_NAME!"
+            call :Log "Found patcher file: !FILE_NAME! - redirecting to Patchers folder"
+        )
+
+        :: Copy file to appropriate destination
+        call :Log "Copying !FILE_NAME! to !DEST_PATH!"
+        copy /Y "%%F" "!DEST_PATH!" >nul
         
         :: Check copy error level
         if !errorlevel! equ 0 (
@@ -359,7 +373,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
             call :Log "Copy failed (error !errorlevel!), attempting alternate copy method..."
             
             :: Use PowerShell with admin privileges for fallback
-            powershell -Command "$ErrorActionPreference = 'Stop'; try { Copy-Item -Path '%%F' -Destination '!INSTALL_DIR!\!FILE_NAME!' -Force } catch { exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_copy_alt.log"
+            powershell -Command "$ErrorActionPreference = 'Stop'; try { Copy-Item -Path '%%F' -Destination '!DEST_PATH!' -Force } catch { exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_copy_alt.log"
 
             if !errorlevel! equ 0 (
                 set /a "FILES_COPIED+=1"
