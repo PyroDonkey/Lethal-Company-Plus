@@ -28,8 +28,8 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.4.0"
-set "LAST_MODIFIED=2025-02-13"
+set "VERSION=1.6.0"
+set "LAST_MODIFIED=2025-02-15"
 
 :: Error code descriptions
 set "ERROR_CODE_1=General/unexpected error"
@@ -329,44 +329,6 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     :: Initialize counter
     set "FILES_COPIED=0"
 
-    :: Determine the base directory for installation
-    set "SOURCE_BASE=!MOD_EXTRACT_DIR!"
-    if exist "!MOD_EXTRACT_DIR!\BepInEx" (
-        set "SOURCE_BASE=!MOD_EXTRACT_DIR!\BepInEx"
-        set "INSTALL_BASE=!FOUND_PATH!\BepInEx"
-        call :Log "Found BepInEx folder at root of mod; installing to game's BepInEx folder."
-    ) else (
-        set "INSTALL_BASE=!FOUND_PATH!"
-        call :Log "No BepInEx folder found at root of mod; installing to game's root folder."
-    )
-
-    :: Process all files
-    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
-        set "CURRENT_FILE=%%F"
-        set "RELATIVE_PATH="
-
-        :: Calculate relative path directly (without helper function)
-        set "RELATIVE_PATH=!CURRENT_FILE:*%SOURCE_BASE%=!"
-        if "!RELATIVE_PATH!"=="!CURRENT_FILE!" (
-            :: If SOURCE_BASE is not part of CURRENT_FILE, skip this file
-            set "RELATIVE_PATH="
-        ) else (
-            if "!RELATIVE_PATH:~0,1!"=="\" (
-                set "RELATIVE_PATH=!RELATIVE_PATH:~1!"
-            )
-
-    :: Initialize counter
-    set "FILES_COPIED=0"
-
-    :: Create the destination directory
-    if not exist "!INSTALL_DIR!" (
-        mkdir "!INSTALL_DIR!" 2>nul || (
-            call :HandleError "Failed to create installation directory for !MOD_NAME!" 8
-            endlocal
-            exit /b 8
-        )
-    )
-
     :: Process all files and flatten them into the mod directory
     for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
         :: Get just filename without path
@@ -374,26 +336,15 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         
         :: Copy file to installation directory
         call :Log "Copying !FILE_NAME! to !INSTALL_DIR!"
-        robocopy "%%~dpF" "!INSTALL_DIR!" "!FILE_NAME!" /R:2 /W:1 /NP >nul
-
-        if errorlevel 0 if not errorlevel 8 (
+        copy /Y "%%F" "!INSTALL_DIR!\" >nul 2>&1
+        
+        if !errorlevel! equ 0 (
             set /a "FILES_COPIED+=1"
-            call :Log "Successfully copied %%~nxF"
+            call :Log "Successfully copied !FILE_NAME!"
         ) else (
-            call :Log "Robocopy failed, attempting alternate copy method..."
-            copy /Y "%%F" "!INSTALL_DIR!\" >nul 2>&1
-            
-            if !errorlevel! equ 0 (
-                set /a "FILES_COPIED+=1"
-                call :Log "Alternate copy successful for %%~nxF"
-            ) else (
-                call :HandleError "Failed to copy %%~nxF (both methods failed)" 8
-                endlocal
-                exit /b 8
-            )
-        )
-    )
-            )
+            call :HandleError "Failed to copy !FILE_NAME!" 8
+            endlocal
+            exit /b 8
         )
     )
 
@@ -638,102 +589,145 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
 :: ======================================================================
 :: FUNCTION: LOCATEGAME
-:: PURPOSE: Locates Lethal Company installation path
+:: PURPOSE: Enhanced game installation path detection
 :: GLOBALS MODIFIED:
 ::   - FOUND_PATH (sets on success)
-::   - STEAM_PATH (used during search)
 :: ERROR CODES:
-::   13 - Game not found
+::   13 - Game not found or invalid path
 :: ======================================================================
 :LocateGame
     setlocal EnableDelayedExpansion
-    call :Log "Starting game location detection..."
+    call :Log "Starting enhanced game location detection..."
     call :ColorEcho BLUE "► Locating Lethal Company installation..."
 
-    :: Check registry locations with proper quoting
-    for %%A in (
-        "HKCU\Software\Valve\Steam"
-        "HKLM\Software\Valve\Steam"
-        "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 1966720"
-    ) do (
-        call :Log "Checking registry: %%~A"
-        reg query "%%~A" /v "InstallLocation" 2>nul | findstr /I /C:"InstallLocation" >nul && (
-            for /f "tokens=2,*" %%B in ('reg query "%%~A" /v "InstallLocation" 2^>nul') do (
-                set "STEAM_PATH=%%C"
+    :: Initialize registry search paths
+    set "REGISTRY_PATHS=HKCU\Software\Valve\Steam HKLM\Software\Valve\Steam HKLM\Software\Wow6432Node\Valve\Steam HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 1966720"
+
+    :: Try registry locations first
+    for %%R in (%REGISTRY_PATHS%) do (
+        call :Log "Checking registry: %%R"
+        reg query "%%R" /v "InstallPath" 2>nul | findstr /i "InstallPath" >nul && (
+            for /f "tokens=2,*" %%A in ('reg query "%%R" /v "InstallPath" 2^>nul') do (
+                set "STEAM_PATH=%%B"
                 call :Log "Found Steam path: !STEAM_PATH!"
-                if exist "!STEAM_PATH!\Lethal Company.exe" (
-                    set "FOUND_PATH=!STEAM_PATH!"
-                    goto :ValidateGamePath
-                )
+                call :ValidateGamePath "!STEAM_PATH!\steamapps\common\Lethal Company" && goto :FoundGame
             )
-        ) || (
-            call :Log "Registry entry not found: %%~A"
         )
     )
 
-    :: Search all Steam library folders
+    :: Check SteamApps environment variable
+    if defined SteamApps (
+        call :Log "Checking SteamApps environment variable: !SteamApps!"
+        call :ValidateGamePath "!SteamApps!\common\Lethal Company" && goto :FoundGame
+    )
+
+    :: Search Steam library folders if Steam is found
     if defined STEAM_PATH (
         if exist "!STEAM_PATH!\steamapps\libraryfolders.vdf" (
-            powershell -Command "$content = Get-Content -LiteralPath '!STEAM_PATH!\steamapps\libraryfolders.vdf';" ^
-                "$paths = $content | Select-String -Pattern '^\s*""path""\s*""([^""]+)""' |" ^
-                    "ForEach-Object { $_.Matches.Groups[1].Value };" ^
-                "$paths | ForEach-Object {" ^
-                    "$lcPath = ('{0}\steamapps\common\Lethal Company' -f $_) -replace '[\\/]+','\\';" ^
-                    "if (Test-Path -LiteralPath $lcPath) {" ^
-                        "'{0}\steamapps\common\Lethal Company' -f $_" ^
+            call :Log "Searching Steam library folders..."
+            powershell -Command "$ErrorActionPreference = 'Stop'; try {" ^
+                "$content = Get-Content '!STEAM_PATH!\steamapps\libraryfolders.vdf';" ^
+                "$paths = $content | Select-String '^\s*\"path\"\s*\"([^\"]+)\"' |" ^
+                "ForEach-Object { $_.Matches.Groups[1].Value };" ^
+                "foreach ($path in $paths) {" ^
+                    "$gamePath = Join-Path $path 'steamapps\common\Lethal Company';" ^
+                    "if (Test-Path (Join-Path $gamePath 'Lethal Company.exe')) {" ^
+                        "Write-Output $gamePath; exit 0" ^
                     "}" ^
-                "}" > "!TEMP_DIR!\steam_libs.txt"
+                "}" ^
+            "} catch { exit 1 }" > "!TEMP_DIR!\steam_paths.txt"
             
-            for /f "usebackq delims=" %%i in ("!TEMP_DIR!\steam_libs.txt") do (
-                if exist "%%i\Lethal Company.exe" (
-                    set "FOUND_PATH=%%i"
-                    goto :ValidateGamePath
+            if !errorlevel! equ 0 (
+                for /f "usebackq delims=" %%P in ("!TEMP_DIR!\steam_paths.txt") do (
+                    call :ValidateGamePath "%%P" && goto :FoundGame
                 )
             )
-            del "!TEMP_DIR!\steam_libs.txt" 2>nul
         )
     )
 
-    :: Manual input with validation loop
+    :: Search common installation drives
+    for %%D in (C D E F G) do (
+        if exist "%%D:\" (
+            call :Log "Searching drive %%D: for common installation paths..."
+            
+            :: Common Steam installation paths
+            for %%P in (
+                "\Program Files\Steam\steamapps\common\Lethal Company"
+                "\Program Files (x86)\Steam\steamapps\common\Lethal Company"
+                "\Steam\steamapps\common\Lethal Company"
+                "\SteamLibrary\steamapps\common\Lethal Company"
+                "\Games\Steam\steamapps\common\Lethal Company"
+            ) do (
+                call :ValidateGamePath "%%D:%%P" && goto :FoundGame
+            )
+        )
+    )
+
+    :: If all automatic detection fails, ask user
     :ManualInput
     call :ColorEcho YELLOW "Could not auto-detect installation."
     echo.
-    echo Enter your Lethal Company path (containing Lethal Company.exe):
-    set /p "FOUND_PATH=Path: "
-    if not defined FOUND_PATH goto :ManualInput
-    call :Log "Raw user input: '!FOUND_PATH!'"
+    echo Enter your Lethal Company installation path (containing Lethal Company.exe):
+    set /p "USER_PATH=Path: "
+    
+    if not defined USER_PATH goto :ManualInput
+    call :ValidateGamePath "!USER_PATH!" && goto :FoundGame
+    
+    call :ColorEcho RED "Invalid path. Game executable not found."
+    goto :ManualInput
 
-:: ======================================================================
-:: FUNCTION: ValidateGamePath
-:: PURPOSE: Verifies game installation path validity
-:: PARAMETERS: None
-:: GLOBALS: FOUND_PATH (validates)
-:: ERROR CODES: 13 - Path validation failed
-:: ======================================================================
-:ValidateGamePath
-    set "FOUND_PATH=!FOUND_PATH:"=!"
-    if "!FOUND_PATH!" neq "%~1" (
-        call :Log "Removed quotes from path: '!FOUND_PATH!'"
-    )
-    if "!FOUND_PATH:~-1!" == "\" (
-        set "FOUND_PATH=!FOUND_PATH:~0,-1!"
-        call :Log "Trimmed trailing slash: '!FOUND_PATH!'"
-    )
-    call :Log "Checking path existence: '!FOUND_PATH!\Lethal Company.exe'"
-    if not exist "!FOUND_PATH!\Lethal Company.exe" (
-        call :Log "Path validation failed - LethalCompany.exe not found" "console"
-        call :HandleError "Lethal Company.exe not found at path" 13
-        goto :ManualInput
-    )
-    call :Log "Path validation succeeded - LethalCompany.exe found"
-    call :ColorEcho GREEN "✓ Lethal Company install located at: !FOUND_PATH!"
+    :FoundGame
+    call :ColorEcho GREEN "✓ Lethal Company installation located at: !FOUND_PATH!"
     call :Log "Valid game path found: !FOUND_PATH!"
     endlocal & set "FOUND_PATH=%FOUND_PATH%"
     exit /b 0
 
-::==================================
-:: More Helper Functions (continuing in required order)
-::==================================
+:: ======================================================================
+:: FUNCTION: VALIDATEGAMEPATH
+:: PURPOSE: Validates potential game installation path
+:: PARAMETERS: %1 - Path to check
+:: RETURNS: 0 if valid, 1 if invalid
+:: GLOBALS MODIFIED: FOUND_PATH (on success)
+:: ======================================================================
+:ValidateGamePath
+    setlocal EnableDelayedExpansion
+    set "CHECK_PATH=%~1"
+    
+    :: Remove quotes if present
+    set "CHECK_PATH=!CHECK_PATH:"=!"
+    
+    :: Remove trailing slash if present
+    if "!CHECK_PATH:~-1!"=="\" set "CHECK_PATH=!CHECK_PATH:~0,-1!"
+    
+    :: Enhanced path validation and logging
+    call :Log "Validating path: !CHECK_PATH!"
+    
+    if not exist "!CHECK_PATH!" (
+        call :Log "ERROR: Path does not exist: !CHECK_PATH!"
+        endlocal
+        exit /b 1
+    )
+
+    if not exist "!CHECK_PATH!\Lethal Company.exe" (
+        call :Log "ERROR: Game executable not found at: !CHECK_PATH!\Lethal Company.exe"
+        endlocal
+        exit /b 1
+    )
+
+    :: Additional validation - check for critical game files
+    set "MISSING_FILES="
+    if not exist "!CHECK_PATH!\UnityPlayer.dll" set "MISSING_FILES=!MISSING_FILES! UnityPlayer.dll"
+    if not exist "!CHECK_PATH!\UnityCrashHandler64.exe" set "MISSING_FILES=!MISSING_FILES! UnityCrashHandler64.exe"
+    
+    if defined MISSING_FILES (
+        call :Log "WARNING: Missing critical game files:!MISSING_FILES!"
+        call :Log "Path may be invalid or installation may be corrupted"
+    )
+
+    :: Path is valid
+    call :Log "SUCCESS: Valid game installation found at: !CHECK_PATH!"
+    endlocal & set "FOUND_PATH=%CHECK_PATH%"
+    exit /b 0
 
 :: ========================================================================
 :: FUNCTION: CREATEBACKUP
