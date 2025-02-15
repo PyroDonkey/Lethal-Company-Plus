@@ -232,7 +232,7 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: INSTALLSINGLEMOD
 :: PURPOSE: Handles full installation process for a single mod
 :: PARAMETERS:
@@ -241,113 +241,179 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 ::   %3 - MOD_INDEX (Installation order index)
 :: GLOBALS: MOD_VERSION, DOWNLOAD_URL, ZIP_FILE, MOD_EXTRACT_DIR, INSTALL_DIR
 :: ERROR CODES: 2,8,9,10 - Various installation failures
-:: ======================================================================
+::===================================================================
 :INSTALLSINGLEMOD
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
     set "MOD_NAME=%~2"
     set "MOD_INDEX=%~3"
     
-    :: Pad index with leading zero for sorting
+    :: Create padded index for sorted load order
     set "MOD_INDEX_PADDED=0!MOD_INDEX!"
     set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
 
-    :: Construct Thunderstore API URL using author/package naming convention
+    :: Setup API endpoint
     set "THUNDERSTORE_API_ENDPOINT=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
-    
-    :: PowerShell block to handle API request with proper error handling
-    powershell -Command "$ErrorActionPreference = 'Stop';" ^
-        "try {" ^
-            "$ProgressPreference = 'SilentlyContinue';" ^
-            "$response = Invoke-RestMethod -Uri '!THUNDERSTORE_API_ENDPOINT!'" ^
-            " -Method Get;" ^
-            "$jsonResponse = $response | ConvertTo-Json -Depth 10;" ^
-            "$jsonResponse | Out-File '!TEMP_DIR!\!MOD_NAME!_response.json'" ^
-            " -Encoding UTF8;" ^
-            "Write-Output ('VERSION=' + $response.latest.version_number);" ^
-            "Write-Output ('URL=' + $response.latest.download_url)" ^
-        "} catch {" ^
-            "Write-Error $_.Exception.Message;" ^
-            "exit 1" ^
-        "}" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
+    call :Log "Fetching mod info from: !THUNDERSTORE_API_ENDPOINT!"
 
-    :: Validate API response was successful
+    :: API Request with error handling
+    powershell -Command "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; try { $response = Invoke-RestMethod -Uri '!THUNDERSTORE_API_ENDPOINT!' -Method Get; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
+
     if !errorlevel! neq 0 (
         call :HandleError "Failed to fetch mod info for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_api_error.log"
         endlocal
         exit /b 2
     )
 
-    :: Parse version and URL from API response output
+    :: Parse version and URL from API response
     for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "MOD_VERSION=%%a"
     for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
-    
-    :: Clean any accidental whitespace from parsed values
     set "MOD_VERSION=!MOD_VERSION: =!"
     set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
-    :: Validate required values exist before proceeding
+    :: Validate parsed data
     if not defined MOD_VERSION (
-        call :HandleError "Invalid API response format for !MOD_NAME!" 10
+        call :HandleError "Invalid API response: Missing version for !MOD_NAME!" 10
         endlocal
         exit /b 10
     )
     if not defined DOWNLOAD_URL (
-        call :HandleError "Invalid API response format for !MOD_NAME!" 10
+        call :HandleError "Invalid API response: Missing URL for !MOD_NAME!" 10
         endlocal
         exit /b 10
     )
 
-    :: Generate unique zip filename using version
+    :: Setup file paths
     set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
-    call :DownloadMod "!DOWNLOAD_URL!" "!ZIP_FILE!" "!MOD_NAME!"
-    
-    :: Non-fatal error allows continuation with other mods
-    if !errorlevel! neq 0 call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
-
-    :: Set up standardized directory paths with load order prefix
     set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
     set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
-    set "INSTALL_LOG=!LOG_DIR!\!MOD_NAME!_install.log"
 
-    call :ExtractFiles "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
-    
+    :: Download mod using PowerShell
+    call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
+    powershell -Command "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -Uri '!DOWNLOAD_URL!' -OutFile '!ZIP_FILE!' } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
     if !errorlevel! neq 0 (
-        call :HandleError "Failed to extract !MOD_NAME! (!ZIP_FILE!)" 9 "!LOG_DIR!\!MOD_NAME!_extract.log"
+        call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
+        endlocal
+        exit /b 2
+    )
+
+    :: Clean extract directory if it exists
+    if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!"
+
+    :: Create fresh extract directory
+    mkdir "!MOD_EXTRACT_DIR!" 2>nul || (
+        call :HandleError "Failed to create extraction directory for !MOD_NAME!" 3
+        endlocal
+        exit /b 3
+    )
+
+    :: Extract mod
+    call :ColorEcho WHITE "* Extracting !MOD_NAME!..."
+    powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
+
+    if !errorlevel! neq 0 (
+        call :HandleError "Failed to extract !MOD_NAME!" 9 "!LOG_DIR!\!MOD_NAME!_extract.log"
         endlocal
         exit /b 9
     )
 
-    :: Flexible directory detection with fallback
-    set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!\plugins\!MOD_NAME!"
-    if not exist "!SOURCE_PLUGIN_DIR!" set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!\plugins"
-    if not exist "!SOURCE_PLUGIN_DIR!" set "SOURCE_PLUGIN_DIR=!MOD_EXTRACT_DIR!"
-
     :: Create installation directory
-    if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!"
+    if not exist "!INSTALL_DIR!" (
+        mkdir "!INSTALL_DIR!" 2>nul || (
+            call :HandleError "Failed to create installation directory for !MOD_NAME!" 8
+            endlocal
+            exit /b 8
+        )
+    )
 
-    :: Copy core plugin files
-    robocopy "!SOURCE_PLUGIN_DIR!" "!INSTALL_DIR!" *.* /S /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\!MOD_NAME!_copy.log" >nul
-    if !errorlevel! GEQ 8 (
-        call :HandleError "Failed to copy plugin files for !MOD_NAME!" 8 "!LOG_DIR!\!MOD_NAME!_copy.log"
+    :: Initialize counter
+    set "FILES_COPIED=0"
+
+    :: Determine the base directory for installation
+    set "SOURCE_BASE=!MOD_EXTRACT_DIR!"
+    if exist "!MOD_EXTRACT_DIR!\BepInEx" (
+        set "SOURCE_BASE=!MOD_EXTRACT_DIR!\BepInEx"
+        set "INSTALL_BASE=!FOUND_PATH!\BepInEx"
+        call :Log "Found BepInEx folder at root of mod; installing to game's BepInEx folder."
+    ) else (
+        set "INSTALL_BASE=!FOUND_PATH!"
+        call :Log "No BepInEx folder found at root of mod; installing to game's root folder."
+    )
+
+    :: Process all files
+    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
+        set "CURRENT_FILE=%%F"
+        set "RELATIVE_PATH="
+
+        :: Calculate relative path directly (without helper function)
+        set "RELATIVE_PATH=!CURRENT_FILE:*%SOURCE_BASE%=!"
+        if "!RELATIVE_PATH!"=="!CURRENT_FILE!" (
+            :: If SOURCE_BASE is not part of CURRENT_FILE, skip this file
+            set "RELATIVE_PATH="
+        ) else (
+            if "!RELATIVE_PATH:~0,1!"=="\" (
+                set "RELATIVE_PATH=!RELATIVE_PATH:~1!"
+            )
+
+    :: Initialize counter
+    set "FILES_COPIED=0"
+
+    :: Create the destination directory
+    if not exist "!INSTALL_DIR!" (
+        mkdir "!INSTALL_DIR!" 2>nul || (
+            call :HandleError "Failed to create installation directory for !MOD_NAME!" 8
+            endlocal
+            exit /b 8
+        )
+    )
+
+    :: Process all files and flatten them into the mod directory
+    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
+        :: Get just filename without path
+        for %%A in ("%%F") do set "FILE_NAME=%%~nxA"
+        
+        :: Copy file to installation directory
+        call :Log "Copying !FILE_NAME! to !INSTALL_DIR!"
+        robocopy "%%~dpF" "!INSTALL_DIR!" "!FILE_NAME!" /R:2 /W:1 /NP >nul
+
+        if errorlevel 0 if not errorlevel 8 (
+            set /a "FILES_COPIED+=1"
+            call :Log "Successfully copied %%~nxF"
+        ) else (
+            call :Log "Robocopy failed, attempting alternate copy method..."
+            copy /Y "%%F" "!INSTALL_DIR!\" >nul 2>&1
+            
+            if !errorlevel! equ 0 (
+                set /a "FILES_COPIED+=1"
+                call :Log "Alternate copy successful for %%~nxF"
+            ) else (
+                call :HandleError "Failed to copy %%~nxF (both methods failed)" 8
+                endlocal
+                exit /b 8
+            )
+        )
+    )
+            )
+        )
+    )
+
+    :: Verify installation
+    if !FILES_COPIED! equ 0 (
+        call :HandleError "No files were copied for !MOD_NAME!" 8
         endlocal
         exit /b 8
     )
 
-    :: Copy root files (metadata, assets) excluding plugins directory and DLLs
-    robocopy "!MOD_EXTRACT_DIR!" "!INSTALL_DIR!" *.* /S /XD plugins /XF *.dll /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\!MOD_NAME!_root_copy.log" >nul
-    if !errorlevel! GEQ 8 (
-        call :HandleError "Failed to copy root files for !MOD_NAME!" 8 "!LOG_DIR!\!MOD_NAME!_root_copy.log"
-        endlocal
-        exit /b 8
-    )
-
-    :: Record version info for future updates/rollbacks
+    :: Record version information
     call :WriteVersionInfo "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!"
-    
-    if !errorlevel! neq 0 call :HandleError "Failed to write version information for !MOD_NAME!" 6
+    if !errorlevel! neq 0 (
+        call :HandleError "Failed to write version info for !MOD_NAME!" 6
+    )
 
-    call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION!"
+    :: Clean up extracted files
+    rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
+
+    call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION! ^(!FILES_COPIED! files^)"
     endlocal
     exit /b 0
 

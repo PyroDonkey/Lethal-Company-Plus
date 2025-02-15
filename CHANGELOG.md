@@ -1,3 +1,26 @@
+## v1.5.0 (2025-02-14)
+
+### Features
+
+* Refined mod installation logic to better handle different mod structures and provide more informative logging.
+* Added fallback mechanism for file copying using the `copy` command if `robocopy` fails.
+
+### Changes
+
+* Updated mod list:
+    * Added:
+        * PathfindingLib by Zaggy1024
+        * LethalFixes by Dev1A3
+    * Updated:
+        * BepInExPack is now by denikson
+        * Matty_Fixes is now by mattymatty
+
+## v1.4.2 (2025-02-14)
+
+### Fixes
+
+* Corrected file folder flattening issue that occurred when using `robocopy` for mod installation.
+
 ## v1.4.1 (2025-02-13)
 
 ### Fixes
@@ -22,35 +45,40 @@
 ### Changes
 
 * Updated the mod list with new and updated mods:
-    * FixRPCLag
-    * Matty_Fixes
-    * LethalConfig
-    * VertexLibrary
-    * NilsHUD
-    * AccurateStaminaDisplay
-    * MoonPriceDisplay
-    * ShowCapacity
-    * HideChat
-    * SpiderPositionFix
-    * CullFactory
-    * IntroTweaks
-    * EnemySoundFixes
-    * JetpackFixes
-    * MeleeFixes
-    * RestoreMapper
-    * MaskFixes
-    * BarberFixes
-    * WeedKillerFixes
-    * Chameleon
-    * RevisitStingers
-    * UpturnedVariety
-    * ShipLoot
-    * CoilHeadStare
-    * FireExitFlip
-    * SuitSaver
-    * OpenBodyCams
-    * AlwaysHearActiveWalkies
-    * LethalRichPresence
+    * Added:
+        * VertexLibrary,LethalCompanyModding
+        * PathfindingLib,Zaggy1024
+        * LethalConfig,AinaVT
+        * FixRPCLag,Bobbie
+        * AdditionalNetworking,mattymatty
+        * PathfindingLagFix,Zaggy1024
+        * ReverbTriggerFix,JacobG5
+        * Matty_Fixes,mattymatty
+        * NilsHUD,Nilaier
+        * SpiderPositionFix,Fandovec03
+        * CullFactory,fumiko
+        * IntroTweaks,Owen3H
+        * ButteryFixes,ButteryStancakes
+        * EnemySoundFixes,ButteryStancakes
+        * JetpackFixes,ButteryStancakes
+        * MeleeFixes,ButteryStancakes
+        * RestoreMapper,ButteryStancakes
+        * MaskFixes,ButteryStancakes
+        * BarberFixes,ButteryStancakes
+        * WeedKillerFixes,ButteryStancakes
+        * Chameleon,ButteryStancakes
+        * RevisitStingers,ButteryStancakes
+        * UpturnedVariety,ButteryStancakes
+        * ShipLoot,tinyhoot
+        * MoonPriceDisplay,Gloveman23
+        * CoilHeadStare,TwinDimensionalProductions
+        * AlwaysHearActiveWalkies,Suskitech
+        * FireExitFlip,PC
+        * SuitSaver,Hexnet111
+        *  OpenBodyCams,Zaggy1024
+        * ShowCapacity,Piggy
+        * HideChat,Monkeytype
+        * LethalRichPresence,mrov
 
 
 ## v1.3.1 (2025-02-12)
