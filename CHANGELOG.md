@@ -1,3 +1,41 @@
+## v1.6.1 (2025-02-15)
+
+### Features
+
+* Enhanced game path detection and validation:
+    * Added more registry paths to check for Steam installation.
+    * Improved search for Steam library folders.
+    * Added search for common Steam installation paths on different drives.
+    * Added validation checks for critical game files.
+    * Improved logging and error reporting in the game path detection process.
+
+* Improved BepInExPack installation:
+    * Used the centralized `:DownloadFile` function for downloading BepInExPack.
+    * Added checks to verify the downloaded BepInExPack file exists and is not empty.
+
+### Changes
+
+* Updated mod list and load order:
+    * Reordered mod list to improve load order.
+    * Re-added `AdditionalNetworking` by mattymatty after install logic was fixed.
+    * Removed `FixRPCLag` due to overlap with `AdditionalNetworking`.
+
+## v1.6.0 (2025-02-15)
+
+### Features
+
+* Enhanced game path detection and validation:
+    * Added more registry paths to check for Steam installation.
+    * Improved search for Steam library folders.
+    * Added search for common Steam installation paths on different drives.
+    * Added validation checks for critical game files.
+    * Improved logging and error reporting in the game path detection process.
+
+* Refined mod installation logic:
+    * Simplified and improved the logic for determining source and installation directories.
+    * Switched to using the `copy` command for file copying.
+    * Added counting and reporting of copied files for each mod.
+
 ## v1.5.0 (2025-02-14)
 
 ### Features
