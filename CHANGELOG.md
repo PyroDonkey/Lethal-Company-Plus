@@ -1,3 +1,15 @@
+## v1.7.0 (2025-02-17)
+
+### Features
+
+* Enhanced mod installation logic:
+    * Switched to `powershell Invoke-RestMethod` for downloading mods.
+    * Refined directory handling for more flexible mod installation.
+    * Added special handling for files in the `BepInEx\Patchers` folder.
+    * Implemented a fallback mechanism using `powershell Copy-Item` for more reliable file copying.
+* Centralized Thunderstore API call logic in a new `:CALL_THUNDERSTORE_API` function.
+* Improved `:INSTALL_BEPINEX_PACK` function with centralized API calls and additional file checks.
+
 ## v1.6.1 (2025-02-15)
 
 ### Features
