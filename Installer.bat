@@ -28,7 +28,7 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.6.2"
+set "VERSION=1.6.1"
 set "LAST_MODIFIED=2025-02-15"
 
 :: Error code descriptions
@@ -252,45 +252,28 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     set "MOD_INDEX_PADDED=0!MOD_INDEX!"
     set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
 
-    :: Setup API endpoint
-    set "THUNDERSTORE_API_ENDPOINT=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
-    call :Log "Fetching mod info from: !THUNDERSTORE_API_ENDPOINT!"
-
-    :: API Request with error handling
-    powershell -Command "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; try { $response = Invoke-RestMethod -Uri '!THUNDERSTORE_API_ENDPOINT!' -Method Get; Write-Output ('VERSION=' + $response.latest.version_number); Write-Output ('URL=' + $response.latest.download_url) } catch { Write-Error $_.Exception.Message; exit 1 }" > "!TEMP_DIR!\!MOD_NAME!_api.txt" 2>"!LOG_DIR!\!MOD_NAME!_api_error.log"
-
+    :: Use centralized API helper to get version info
+    set "API_OUTPUT=%TEMP_DIR%\!MOD_NAME!_api.txt"
+    call :CALL_THUNDERSTORE_API "!MOD_AUTHOR!" "!MOD_NAME!" "!API_OUTPUT!"
     if !errorlevel! neq 0 (
-        call :HandleError "Failed to fetch mod info for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_api_error.log"
         endlocal
-        exit /b 2
+        exit /b !errorlevel!
     )
 
-    :: Parse version and URL from API response
-    for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "MOD_VERSION=%%a"
-    for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\!MOD_NAME!_api.txt"') do set "DOWNLOAD_URL=%%a"
+    :: Parse version and URL
+    for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!API_OUTPUT!"') do set "MOD_VERSION=%%a"
+    for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!API_OUTPUT!"') do set "DOWNLOAD_URL=%%a"
     set "MOD_VERSION=!MOD_VERSION: =!"
     set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
-
-    :: Validate parsed data
-    if not defined MOD_VERSION (
-        call :HandleError "Invalid API response: Missing version for !MOD_NAME!" 10
-        endlocal
-        exit /b 10
-    )
-    if not defined DOWNLOAD_URL (
-        call :HandleError "Invalid API response: Missing URL for !MOD_NAME!" 10
-        endlocal
-        exit /b 10
-    )
 
     :: Setup file paths
     set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
     set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
     set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
 
-    :: Download mod using PowerShell
+    :: Download mod using centralized download function
     call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
-    powershell -Command "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -Uri '!DOWNLOAD_URL!' -OutFile '!ZIP_FILE!' } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
+    call :DownloadFile "!DOWNLOAD_URL!" "!ZIP_FILE!" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
     if !errorlevel! neq 0 (
         call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
         endlocal
@@ -307,11 +290,11 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         exit /b 3
     )
 
-        :: Display the extracting message
+    :: Display the extracting message
     call :ColorEcho WHITE "* Extracting !MOD_NAME!..."
 
     :: Extract mod
-powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
+    powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
 
     if !errorlevel! neq 0 (
         call :HandleError "Failed to extract !MOD_NAME!" 9 "!LOG_DIR!\!MOD_NAME!_extract.log"
@@ -717,34 +700,49 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
     call :ColorEcho WHITE "Please enter the full path to your Lethal Company installation"
     call :ColorEcho WHITE "(The folder containing 'Lethal Company.exe'):"
     echo.
+    :RetryPathInput
+    set "USER_PATH="
     set /p "USER_PATH=Path: "
     
     if not defined USER_PATH (
         call :Log "DEBUG: No path entered"
         call :ColorEcho RED "No path entered."
-        goto :ManualInput
+        goto :RetryPathInput
     )
     
-    call :Log "DEBUG: User entered path: !USER_PATH!"
+    :: Enhanced path sanitization
     set "FOUND_PATH=!USER_PATH:"=!"
+    set "FOUND_PATH=!FOUND_PATH:&=!"
+    set "FOUND_PATH=!FOUND_PATH:'=!"
+    set "FOUND_PATH=!FOUND_PATH: = !"
+    set "FOUND_PATH=!FOUND_PATH:\\=\!"
     
-:ValidateAndSet
-    call :Log "DEBUG: Entering validation phase..."
-    
-    :: Remove trailing slash if present
-    if "!FOUND_PATH:~-1!" == "\" (
-        set "FOUND_PATH=!FOUND_PATH:~0,-1!"
-        call :Log "DEBUG: Removed trailing slash"
+    :: Remove trailing slash/backslash
+    if defined FOUND_PATH (
+        :trimloop
+        if "!FOUND_PATH:~-1!"=="\" set "FOUND_PATH=!FOUND_PATH:~0,-1!" & goto trimloop
+        if "!FOUND_PATH:~-1!"=="/" set "FOUND_PATH=!FOUND_PATH:~0,-1!" & goto trimloop
     )
     
-    call :Log "DEBUG: Validating path: '!FOUND_PATH!'"
+    call :Log "DEBUG: Sanitized path: '!FOUND_PATH!'"
     
-    :: Check for game executable
-    if exist "!FOUND_PATH!\Lethal Company.exe" (
-        call :Log "DEBUG: Game executable found"
-    ) else (
+    :: Validate path format
+    echo !FOUND_PATH! | findstr /r /c:"^[A-Za-z]:\\[^/:\*\\?<>|\"]*$" >nul
+    if !errorlevel! neq 0 (
+        call :ColorEcho RED "Invalid path format. Path must be in format: C:\Folder\Subfolder"
+        call :Log "Invalid path format: '!FOUND_PATH!'"
+        goto :RetryPathInput
+    )
+
+:ValidateAndSet
+    :: Enhanced path validation
+    call :Log "DEBUG: Final validation path: '!FOUND_PATH!'"
+    
+    if not exist "!FOUND_PATH!\Lethal Company.exe" (
+        call :ColorEcho RED "Lethal Company.exe not found at:"
+        call :ColorEcho RED "!FOUND_PATH!"
         call :Log "DEBUG: Game executable not found at: '!FOUND_PATH!\Lethal Company.exe'"
-        goto :ManualInput
+        goto :RetryPathInput
     )
 
     :: Validate critical game files
@@ -958,7 +956,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
 
 :: ======================================================================
 :: FUNCTION: DownloadFile
-:: PURPOSE: Core file download logic with error handling
+:: PURPOSE: Core file download logic with robust error handling
 :: PARAMETERS:
 ::   %1 - Source URL
 ::   %2 - Output file path
@@ -970,25 +968,139 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
     set "URL=%~1"
     set "OUTPUT=%~2"
 
-    powershell -Command "$ErrorActionPreference = 'Stop';" ^
-        "try {" ^
-            "$ProgressPreference = 'SilentlyContinue';" ^
-            "$webClient = New-Object System.Net.WebClient;" ^
-            "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
-            "$webClient.DownloadFile('!URL!', '!OUTPUT!')" ^
-        "} catch {" ^
-            "Write-Error (\"Download Failed: $_\");" ^
-            "exit 1" ^
-        "}"
+    powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $webClient = New-Object System.Net.WebClient; $webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%'); $webClient.DownloadFile('%URL%', '%OUTPUT%') } catch { Write-Host $_.Exception.Message 2>&1 | Out-Null; exit 1 }"
     
     if !errorlevel! neq 0 (
         endlocal
         exit /b 2
     )
     
+    :: Verify file exists and is not empty
+    if not exist "!OUTPUT!" (
+        endlocal
+        exit /b 2
+    )
+    
+    for %%A in ("!OUTPUT!") do (
+        if %%~zA LEQ 0 (
+            del "!OUTPUT!" 2>nul
+            endlocal
+            exit /b 2
+        )
+    )
+    
     endlocal
     exit /b 0
 
+::=====================================================================
+:: FUNCTION: CALL_THUNDERSTORE_API
+:: PURPOSE: Centralized helper for Thunderstore API calls with robust error handling
+:: PARAMETERS:
+::   %1 - MOD_AUTHOR (Thunderstore namespace)
+::   %2 - MOD_NAME (Thunderstore package name)
+::   %3 - OUTPUT_FILE (Where to save version and URL info)
+:: GLOBALS USED:
+::   - TEMP_DIR (for temporary files)
+::   - LOG_DIR (for error logs)
+:: RETURNS:
+::   - Creates output file with VERSION= and URL= lines
+::   - Exit code 0 on success, 2 on network error, 10 on invalid response
+::=====================================================================
+:CALL_THUNDERSTORE_API
+    setlocal EnableDelayedExpansion
+    set "MOD_AUTHOR=%~1"
+    set "MOD_NAME=%~2"
+    set "OUTPUT_FILE=%~3"
+    
+    :: Ensure required directories exist
+    if not exist "!LOG_DIR!" (
+        mkdir "!LOG_DIR!" 2>nul || (
+            call :HandleError "Failed to create log directory" 3
+            endlocal
+            exit /b 3
+        )
+    )
+    
+    set "API_LOG=!LOG_DIR!\!MOD_NAME!_api.log"
+    
+    :: Ensure parent directory of OUTPUT_FILE exists
+    for %%F in ("!OUTPUT_FILE!") do (
+        set "OUTPUT_DIR=%%~dpF"
+        if not exist "!OUTPUT_DIR!" (
+            mkdir "!OUTPUT_DIR!" 2>nul || (
+                call :HandleError "Failed to create output directory" 3
+                endlocal
+                exit /b 3
+            )
+        )
+    )
+
+    :: Setup API endpoint
+    set "API_URL=https://thunderstore.io/api/experimental/package/!MOD_AUTHOR!/!MOD_NAME!/"
+
+    :: Log the URL before making the request
+    set "LOG_MESSAGE=Fetching mod info from: !API_URL!"
+    call :Log "!LOG_MESSAGE!"
+
+    :: Create a temporary response file
+    set "TEMP_RESPONSE=!TEMP_DIR!\!MOD_NAME!_response.json"
+
+    :: Make API request with enhanced error handling
+    powershell -Command ^
+        "$ErrorActionPreference = 'Stop';" ^
+        "$ProgressPreference = 'SilentlyContinue';" ^
+        "try {" ^
+            "$response = Invoke-RestMethod -Uri '!API_URL!' -Method Get;" ^
+            "if ($null -eq $response.latest.version_number -or $null -eq $response.latest.download_url) {" ^
+                "throw 'Invalid API response structure'" ^
+            "}" ^
+            "$response | ConvertTo-Json | Set-Content -Path '!TEMP_RESPONSE!';" ^
+            "'VERSION=' + $response.latest.version_number | Set-Content -Path '!OUTPUT_FILE!';" ^
+            "'URL=' + $response.latest.download_url | Add-Content -Path '!OUTPUT_FILE!';" ^
+        "} catch {" ^
+            "$_.Exception.Message | Out-File '!API_LOG!';" ^
+            "exit $(if ($_.Exception.Message -match 'Invalid API') { 10 } else { 2 })" ^
+        "}"
+
+    if !errorlevel! equ 2 (
+        call :HandleError "Network error fetching !MOD_NAME! info" 2 "!API_LOG!"
+        endlocal
+        exit /b 2
+    ) else if !errorlevel! equ 10 (
+        call :HandleError "Invalid API response for !MOD_NAME!" 10 "!API_LOG!"
+        endlocal
+        exit /b 10
+    )
+
+    :: Validate output file exists and has content
+    if not exist "!OUTPUT_FILE!" (
+        call :HandleError "API response file not created for !MOD_NAME!" 10
+        endlocal
+        exit /b 10
+    )
+
+    :: Verify required data is present
+    findstr /B "VERSION=" "!OUTPUT_FILE!" >nul || (
+        call :HandleError "Missing version info in API response for !MOD_NAME!" 10
+        type "!API_LOG!" >> "!LOG_FILE!"
+        type "!TEMP_RESPONSE!" >> "!LOG_FILE!"
+        endlocal
+        exit /b 10
+    )
+    findstr /B "URL=" "!OUTPUT_FILE!" >nul || (
+        call :HandleError "Missing URL in API response for !MOD_NAME!" 10
+        type "!API_LOG!" >> "!LOG_FILE!"
+        type "!TEMP_RESPONSE!" >> "!LOG_FILE!"
+        endlocal
+        exit /b 10
+    )
+
+    :: Clean up temporary response file
+    if exist "!TEMP_RESPONSE!" del /f /q "!TEMP_RESPONSE!" 2>nul
+
+    endlocal
+    exit /b 0
+    
 :: ======================================================================
 :: FUNCTION: DownloadMod
 :: ======================================================================
@@ -1160,52 +1272,46 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: INSTALL_BEPINEX_PACK 
-:: ======================================================================
 :INSTALL_BEPINEX_PACK
     setlocal EnableDelayedExpansion
     call :Log "Starting BepInExPack installation..."
     call :ColorEcho BLUE "► Installing BepInExPack..."
 
-    :: Construct API URL
-    set "MOD_API_URL=https://thunderstore.io/api/experimental/package/BepInEx/BepInExPack/"
-    call :Log "DEBUG: Calling API URL: !MOD_API_URL!"
-
-    :: Fetch mod info
-    powershell -Command "$ErrorActionPreference = 'Stop';" ^
-        "try {" ^
-        "$ProgressPreference = 'SilentlyContinue';" ^
-        "$response = Invoke-RestMethod -Uri '!MOD_API_URL!' -Method Get;" ^
-        "$jsonResponse = $response | ConvertTo-Json -Depth 10;" ^
-        "$jsonResponse | Out-File '!TEMP_DIR!\BepInExPack_response.json' -Encoding UTF8;" ^
-        "Write-Output ('VERSION=' + $response.latest.version_number);" ^
-        "Write-Output ('URL=' + $response.latest.download_url)" ^
-        "} catch {" ^
-        "Write-Error $_.Exception.Message;" ^
-        "exit 1" ^
-        "}" > "!TEMP_DIR!\BepInExPack_api.txt" 2>"!LOG_DIR!\BepInExPack_api_error.log"
-
+    :: Use centralized API helper to get version info
+    set "API_OUTPUT=%TEMP_DIR%\BepInExPack_api.txt"
+    call :CALL_THUNDERSTORE_API "bbepis" "BepInExPack" "!API_OUTPUT!"
     if !errorlevel! neq 0 (
-        call :Log "ERROR: Failed to fetch BepInExPack info - Check !LOG_DIR!\BepInExPack_api_error.log"
-        call :ColorEcho RED "ERROR: Failed to fetch BepInExPack data"
-        type "!LOG_DIR!\BepInExPack_api_error.log" >> "!LOG_FILE!"
         endlocal
-        exit /b 2
+        exit /b !errorlevel!
     )
 
-    :: Parse version and URL
-    for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!TEMP_DIR!\BepInExPack_api.txt"') do set "VERSION=%%a"
-    for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!TEMP_DIR!\BepInExPack_api.txt"') do set "DOWNLOAD_URL=%%a"
+    :: Parse version and URL using type to pipe file contents to findstr
+    for /f "tokens=2 delims==" %%a in ('type "!API_OUTPUT!" ^| findstr /B "VERSION="') do set "VERSION=%%a"
+    for /f "tokens=2 delims==" %%a in ('type "!API_OUTPUT!" ^| findstr /B "URL="') do set "DOWNLOAD_URL=%%a"
+    
+    :: Trim whitespace from parsed values
     set "VERSION=!VERSION: =!"
     set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
+
+    :: Verify parsed values
+    if not defined VERSION (
+        call :HandleError "Failed to parse BepInExPack version" 10
+        endlocal
+        exit /b 10
+    )
+    
+    if not defined DOWNLOAD_URL (
+        call :HandleError "Failed to parse BepInExPack download URL" 10
+        endlocal
+        exit /b 10
+    )
 
     :: Setup paths
     set "ZIP_FILE=!TEMP_DIR!\BepInExPack_v!VERSION!.zip"
     set "EXTRACT_ROOT=!EXTRACT_DIR!\BepInEx"
     set "SOURCE_DIR=!EXTRACT_ROOT!\BepInExPack"
 
-    :: Download BepInExPack using centralized function
+    :: Download BepInExPack
     call :Log "Downloading BepInExPack from: !DOWNLOAD_URL!"
     call :ColorEcho WHITE "* Downloading BepInExPack..."
     call :DownloadFile "!DOWNLOAD_URL!" "!ZIP_FILE!" 2>"!LOG_DIR!\BepInExPack_download.log"
@@ -1233,7 +1339,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
         )
     )
 
-    :: Extract BepInExPack using :ExtractFiles
+    :: Extract BepInExPack
     call :Log "Extracting BepInExPack..." "console"
     if exist "!EXTRACT_ROOT!" rd /s /q "!EXTRACT_ROOT!" >nul 2>&1
     call :ExtractFiles "!ZIP_FILE!" "!EXTRACT_ROOT!" "BepInExPack"
@@ -1243,7 +1349,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
         exit /b 9
     )
 
-    :: Copy the *contents* of the BepInEx folder.
+    :: Copy BepInEx folder contents
     call :Log "Copying BepInEx files to: !FOUND_PATH!"
     robocopy "!SOURCE_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
     if !errorlevel! GEQ 8 (
@@ -1254,7 +1360,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
         exit /b 8
     )
 
-    :: Copy winhttp.dll, doorstop_config.ini and changelog.txt to the game root directory
+    :: Copy root files
     robocopy "!SOURCE_DIR!" "!FOUND_PATH!" "winhttp.dll" "doorstop_config.ini" "changelog.txt" /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
     if !errorlevel! GEQ 8 (
         call :Log "ERROR: Failed to copy BepInEx root files"
@@ -1264,7 +1370,7 @@ powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path
         exit /b 8
     )
 
-    :: Create plugins folder (if it doesn't exist)
+    :: Create plugins folder if missing
     if not exist "!FOUND_PATH!\BepInEx\plugins" (
         mkdir "!FOUND_PATH!\BepInEx\plugins"
         call :Log "Created missing BepInEx\plugins folder."
