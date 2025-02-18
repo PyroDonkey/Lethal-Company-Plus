@@ -28,8 +28,8 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.6.1"
-set "LAST_MODIFIED=2025-02-15"
+set "VERSION=1.8.0"
+set "LAST_MODIFIED=2025-02-17"
 
 :: Error code descriptions
 set "ERROR_CODE_1=General/unexpected error"
@@ -58,18 +58,12 @@ set "SOURCE_DIR="
 :: Temporary working variables
 set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
-:: =================================
-:: User Confirmation Dialog
-:: =================================
-
-:: ======================================================================
+::===================================================================
 :: FUNCTION: CHECK_AND_REQUEST_ELEVATION
-:: PURPOSE: Requests administrator privileges for installation
-:: GLOBALS MODIFIED:
-::   - INSTALL_STATUS (sets on elevation failure)
-:: ERROR CODES:
-::   12 - Elevation request failed
-:: ======================================================================
+:: Requests and verifies admin privileges
+:: MODIFIES: INSTALL_STATUS
+:: RETURNS: 0=Success, 12=ElevationFailed
+::===================================================================
 :CHECK_AND_REQUEST_ELEVATION
     WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
     if %errorlevel% equ 0 (
@@ -87,9 +81,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     )
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: CONTINUE_INITIALIZATION
-:: ======================================================================
+:: Sets up working directories and environment
+:: MODIFIES: INSTALL_STATUS
+:: RETURNS: 0=Success, 3=DirectoryError
+::===================================================================
 :CONTINUE_INITIALIZATION
     call :CREATE_DIRECTORY "%TEMP_DIR%" || (
         call :HandleError "Failed to create temp directory: %TEMP_DIR%" 3
@@ -206,9 +203,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
     goto :CLEANUP
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: INSTALL_ALL_MODS
-:: ======================================================================
+:: Processes and installs all configured mods
+:: USES: MOD_LIST, MOD_COUNT
+:: RETURNS: 0=Success, Various error codes from InstallSingleMod
+::===================================================================
 :INSTALL_ALL_MODS
     setlocal EnableDelayedExpansion
     call :ColorEcho BLUE "► Beginning mod installation..."
@@ -233,14 +233,10 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     exit /b 0
 
 ::===================================================================
-:: FUNCTION: INSTALLSINGLEMOD
-:: PURPOSE: Handles full installation process for a single mod
-:: PARAMETERS:
-::   %1 - MOD_AUTHOR (Thunderstore namespace)
-::   %2 - MOD_NAME (Thunderstore package name)
-::   %3 - MOD_INDEX (Installation order index)
-:: GLOBALS: MOD_VERSION, DOWNLOAD_URL, ZIP_FILE, MOD_EXTRACT_DIR, INSTALL_DIR
-:: ERROR CODES: 2,8,9,10 - Various installation failures
+:: FUNCTION: InstallSingleMod
+:: Handles installation of individual mod
+:: PARAMS: %1=Author, %2=ModName, %3=Index
+:: RETURNS: 0=Success, Various installation error codes
 ::===================================================================
 :INSTALLSINGLEMOD
     setlocal EnableDelayedExpansion
@@ -294,7 +290,15 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     call :ColorEcho WHITE "* Extracting !MOD_NAME!..."
 
     :: Extract mod
-    powershell -Command "$ErrorActionPreference = 'Stop'; try { Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!MOD_EXTRACT_DIR!' -Force } catch { Write-Error $_.Exception.Message; exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
+    powershell -Command "$ErrorActionPreference = 'Stop';" ^
+        "try {" ^
+            "Expand-Archive -Path '!ZIP_FILE!'" ^
+            " -DestinationPath '!MOD_EXTRACT_DIR!'" ^
+            " -Force" ^
+        "} catch {" ^
+            "Write-Error $_.Exception.Message;" ^
+            "exit 1" ^
+        "}" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
 
     if !errorlevel! neq 0 (
         call :HandleError "Failed to extract !MOD_NAME!" 9 "!LOG_DIR!\!MOD_NAME!_extract.log"
@@ -356,7 +360,14 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
             call :Log "Copy failed (error !errorlevel!), attempting alternate copy method..."
             
             :: Use PowerShell with admin privileges for fallback
-            powershell -Command "$ErrorActionPreference = 'Stop'; try { Copy-Item -Path '%%F' -Destination '!DEST_PATH!' -Force } catch { exit 1 }" 2>"!LOG_DIR!\!MOD_NAME!_copy_alt.log"
+            powershell -Command "$ErrorActionPreference = 'Stop';" ^
+                "try {" ^
+                    "Copy-Item -Path '%%F'" ^
+                    " -Destination '!DEST_PATH!'" ^
+                    " -Force" ^
+                "} catch {" ^
+                    "exit 1" ^
+                "}" 2>"!LOG_DIR!\!MOD_NAME!_copy_alt.log"
 
             if !errorlevel! equ 0 (
                 set /a "FILES_COPIED+=1"
@@ -389,13 +400,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: SHOW_MOD_LIST_AND_CONFIRM
-:: PURPOSE: Display mod selection and obtain user consent
-:: PARAMETERS: None
-:: GLOBALS: CONFIRMATION_FILE (creates/updates), MOD_COUNT (uses)
-:: ERROR CODES: 11 - Invalid user input
-:: ======================================================================
+:: Displays mods and gets user confirmation
+:: MODIFIES: CONFIRMATION_FILE
+:: RETURNS: 0=Confirmed, 1=Cancelled, 11=InvalidInput
+::===================================================================
 :SHOW_MOD_LIST_AND_CONFIRM
     setlocal EnableDelayedExpansion
     del "%CONFIRMATION_FILE%" 2>nul
@@ -432,16 +442,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         goto :CONFIRM_LOOP
     )
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: CREATE_DIRECTORY
-:: PURPOSE: Safely create directories with error handling
-:: PARAMETERS:
-::   %1 - Directory path to create
-:: GLOBALS USED:
-::   - LOG_FILE (appends creation attempts)
-:: ERROR CODES:
-::   3 - Directory creation failure
-:: ======================================================================
+:: Creates directory with error handling
+:: PARAMS: %1=DirectoryPath
+:: RETURNS: 0=Success, 3=CreateError
+::===================================================================
 :CREATE_DIRECTORY
     setlocal
     set "DIR_PATH=%~1"
@@ -455,15 +461,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: LOG
-:: PURPOSE: Writes messages to log file and/or console
-:: PARAMETERS:
-::   %1 - Message text
-::   %2 - "console" to also display in console
-:: GLOBALS MODIFIED:
-::   - LOG_FILE (appends messages)
-:: ======================================================================
+::===================================================================
+:: FUNCTION: Log
+:: Writes messages to log file and optionally console
+:: PARAMS: %1=Message, %2=ConsoleFlag
+:: USES: LOG_FILE
+::===================================================================
 :Log
     setlocal EnableDelayedExpansion
     set "MESSAGE=%~1"
@@ -473,13 +476,11 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: COLORECHO
-:: PURPOSE: Outputs colored text to console when supported
-:: PARAMETERS:
-::   %1 - Color name (GREEN/YELLOW/RED/etc)
-::   %2 - Message text
-:: ======================================================================
+::===================================================================
+:: FUNCTION: ColorEcho
+:: Outputs colored text when supported
+:: PARAMS: %1=Color, %2=Message
+::===================================================================
 :ColorEcho
     setlocal EnableDelayedExpansion
     set "COLOR=%~1"
@@ -492,19 +493,13 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: HANDLEERROR
-:: PURPOSE: Centralized error handling and reporting
-:: PARAMETERS:
-::   %1 - Error description
-::   %2 - Error category code
-::   %3 - Optional log file path
-:: GLOBALS MODIFIED:
-::   - INSTALL_STATUS (sets global error state)
-::   - LOG_FILE (appends error details)
-:: ERROR CODES: 
-::   Propagates received error code
-:: ======================================================================
+::===================================================================
+:: FUNCTION: HandleError
+:: Processes and logs error conditions
+:: PARAMS: %1=Description, %2=Code, %3=LogFile
+:: MODIFIES: INSTALL_STATUS
+:: RETURNS: Provided error code
+::===================================================================
 :HandleError
     setlocal EnableDelayedExpansion
     set "ERROR_DESCRIPTION=%~1"
@@ -539,13 +534,11 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         exit /b %ERROR_CATEGORY_CODE%
     )
 
-:: ======================================================================
-:: FUNCTION: INITIALIZEENVIRONMENT
-:: PURPOSE: Verifies system requirements and prepares environment
-:: PARAMETERS: None
-:: GLOBALS: TEMP_DIR, LOG_DIR, EXTRACT_DIR (sets paths)
-:: ERROR CODES: 1 - Missing requirements
-:: ======================================================================
+::===================================================================
+:: FUNCTION: InitializeEnvironment
+:: Verifies system requirements and setup
+:: RETURNS: 0=Success, 1=MissingReqs, 2=NetworkError, 4=DiskSpace
+::===================================================================
 :InitializeEnvironment
     setlocal EnableDelayedExpansion
     call :ColorEcho BLUE "► Initializing installer..."
@@ -608,14 +601,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-::======================================================================
+::===================================================================
 :: FUNCTION: LocateGame
-:: PURPOSE: Enhanced game installation path detection with debug output
-:: GLOBALS MODIFIED:
-::   - FOUND_PATH (sets on success)
-:: ERROR CODES:
-::   13 - Game not found/invalid path
-::======================================================================
+:: Finds and validates game installation
+:: MODIFIES: FOUND_PATH
+:: RETURNS: 0=Success, 13=GameNotFound
+::===================================================================
 :LocateGame
     setlocal EnableDelayedExpansion
     set "FOUND_PATH="
@@ -774,13 +765,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal & set "FOUND_PATH=%FOUND_PATH%"
     exit /b 0
     
-:: ========================================================================
-:: FUNCTION: CREATEBACKUP
-:: PURPOSE: Creates backup of existing BepInEx installation
-:: PARAMETERS: None
-:: GLOBALS: BACKUP_DIR (sets backup location)
-:: ERROR CODES: 5 - Backup creation failure
-:: ========================================================================
+::===================================================================
+:: FUNCTION: CreateBackup
+:: Creates backup of existing BepInEx installation
+:: MODIFIES: BACKUP_DIR
+:: RETURNS: 0=Success, 5=BackupError
+::===================================================================
 :CreateBackup
     setlocal EnableDelayedExpansion
     call :ColorEcho BLUE "► Creating backup..."
@@ -823,19 +813,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         exit /b 0
     )
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: RestoreBackup
-:: PURPOSE: Restores BepInEx configuration from backup
-:: PARAMETERS: None
-:: GLOBALS:
-::   BACKUP_DIR (reads) - Backup source location
-::   FOUND_PATH (modifies) - Game installation directory
-:: ERROR CODES:
-::   5 - Restoration failure
-:: NOTES:
-::   - Uses robocopy for directory mirroring
-::   - Preserves original backup on failure
-:: ======================================================================
+:: Restores BepInEx from backup
+:: USES: BACKUP_DIR, FOUND_PATH
+:: RETURNS: 0=Success, 3=NotFound, 8=RestoreError
+::===================================================================
 :RestoreBackup
     setlocal EnableDelayedExpansion
     call :ColorEcho BLUE "► Restoring backup..."
@@ -878,20 +861,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: WriteVersionInfo
-:: PURPOSE: Maintains mod version manifest for future updates
-:: PARAMETERS:
-::   %1 - Mod author
-::   %2 - Mod name
-::   %3 - Mod version
-:: GLOBALS MODIFIED:
-::   - VERSION_FILE (updates version information)
-:: ERROR CODES:
-::   8 - File write failure
-:: NOTES:
-::   - Creates config directory if missing
-:: ======================================================================
+:: Updates mod version manifest
+:: PARAMS: %1=Author, %2=ModName, %3=Version
+:: RETURNS: 0=Success, 6=ConfigError, 8=WriteError
+::===================================================================
 :WriteVersionInfo
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
@@ -954,21 +929,27 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: DownloadFile
-:: PURPOSE: Core file download logic with robust error handling
-:: PARAMETERS:
-::   %1 - Source URL
-::   %2 - Output file path
-:: ERROR CODES:
-::   2 - Download failure
-:: ======================================================================
+:: Downloads file from URL with error handling
+:: PARAMS: %1=URL, %2=Output path
+:: RETURNS: 0=Success, 2=Download failure
+::===================================================================
 :DownloadFile
     setlocal EnableDelayedExpansion
     set "URL=%~1"
     set "OUTPUT=%~2"
 
-    powershell -Command "$ErrorActionPreference = 'Stop'; try { $ProgressPreference = 'SilentlyContinue'; $webClient = New-Object System.Net.WebClient; $webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%'); $webClient.DownloadFile('%URL%', '%OUTPUT%') } catch { Write-Host $_.Exception.Message 2>&1 | Out-Null; exit 1 }"
+    powershell -Command "$ErrorActionPreference = 'Stop';" ^
+        "try { " ^
+            "$ProgressPreference = 'SilentlyContinue';" ^
+            "$webClient = New-Object System.Net.WebClient;" ^
+            "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
+            "$webClient.DownloadFile('%URL%', '%OUTPUT%') " ^
+        "} catch { " ^
+            "Write-Host $_.Exception.Message 2>&1 | Out-Null; " ^
+            "exit 1 " ^
+        "}"
     
     if !errorlevel! neq 0 (
         endlocal
@@ -992,20 +973,13 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-::=====================================================================
+::===================================================================
 :: FUNCTION: CALL_THUNDERSTORE_API
-:: PURPOSE: Centralized helper for Thunderstore API calls with robust error handling
-:: PARAMETERS:
-::   %1 - MOD_AUTHOR (Thunderstore namespace)
-::   %2 - MOD_NAME (Thunderstore package name)
-::   %3 - OUTPUT_FILE (Where to save version and URL info)
-:: GLOBALS USED:
-::   - TEMP_DIR (for temporary files)
-::   - LOG_DIR (for error logs)
-:: RETURNS:
-::   - Creates output file with VERSION= and URL= lines
-::   - Exit code 0 on success, 2 on network error, 10 on invalid response
-::=====================================================================
+:: Fetches mod info from Thunderstore API
+:: PARAMS: %1=Author, %2=ModName, %3=OutputFile
+:: USES: TEMP_DIR, LOG_DIR
+:: RETURNS: 0=Success, 2=Network error, 10=Invalid response
+::===================================================================
 :CALL_THUNDERSTORE_API
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
@@ -1101,9 +1075,13 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
     
-:: ======================================================================
+::===================================================================
 :: FUNCTION: DownloadMod
-:: ======================================================================
+:: Downloads and validates specific mod package
+:: PARAMS: %1=URL, %2=OutputPath, %3=ModName
+:: USES: LOG_DIR
+:: RETURNS: 0=Success, 1=NotFound, 2=DownloadError
+::===================================================================
 :DownloadMod
     setlocal EnableDelayedExpansion
     set "URL=%~1"
@@ -1144,134 +1122,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: ConfigureBepInEx
-:: ======================================================================
-:ConfigureBepInEx
-    setlocal EnableDelayedExpansion
-    call :Log "Configuring BepInEx..." "console"
-    call :ColorEcho BLUE "► Configuring BepInEx..."
-
-    :: Create config directory if missing
-    if not exist "!FOUND_PATH!\BepInEx\config" (
-        mkdir "!FOUND_PATH!\BepInEx\config" 2>nul || (
-            call :HandleError "Failed to create BepInEx config directory" 6
-            endlocal
-            exit /b 6
-        )
-    )
-
-    set "BEPINEX_CFG=!FOUND_PATH!\BepInEx\config\BepInEx.cfg"
-    
-    :: Determine configuration mode
-    if exist "!BEPINEX_CFG!" (
-        call :ConfigureBepInExInternal 0
-    ) else (
-        call :ConfigureBepInExInternal 1
-    )
-    if !errorlevel! neq 0 (
-        endlocal
-        exit /b 1
-    )
-
-    call :ColorEcho GREEN "✓ BepInEx configuration complete"
-    endlocal
-    exit /b 0
-
-:: ======================================================================
-:: FUNCTION: ConfigureBepInExInternal
-:: PURPOSE: Core configuration logic with mode selection
-:: PARAMETERS: %1 - CREATE_DEFAULT (1=true/0=false)
-:: ======================================================================
-:ConfigureBepInExInternal
-    setlocal EnableDelayedExpansion
-    set "CREATE_DEFAULT=%~1"
-    set "TEMP_CFG=!TEMP_DIR!\BepInEx.cfg.tmp"
-
-    if !CREATE_DEFAULT! equ 1 (
-        call :Log "Creating default configuration..."
-        (
-            echo [Logging.Console]
-            echo Enabled = true
-            echo.
-            echo [Logging.Disk]
-            echo WriteUnityLog = false
-            echo.
-            echo [Paths]
-            echo BepInExRootPath = BepInEx
-            echo.
-            echo [Preloader.Entrypoint]
-            echo Assembly = BepInEx.Preloader.dll
-            echo.
-            echo [Loading]
-            echo LoadPlugins = true
-        ) > "!BEPINEX_CFG!" 2>"!LOG_DIR!\bepinex_config.log"
-        
-        if !errorlevel! neq 0 (
-            call :HandleError "Config creation failed" 6
-            endlocal
-            exit /b 6
-        )
-    ) else (
-        call :Log "Updating existing configuration..."
-        set "IN_LOGGING_CONSOLE=0"
-        set "IN_LOADING=0"
-        set "CONSOLE_FOUND=0"
-        set "LOADING_FOUND=0"
-
-        (for /f "usebackq delims=" %%a in ("!BEPINEX_CFG!") do (
-            set "LINE=%%a"
-            if "!LINE!"=="[Logging.Console]" (
-                set "IN_LOGGING_CONSOLE=1"
-                set "CONSOLE_FOUND=1"
-                echo !LINE!
-            ) else if "!LINE!"=="[Loading]" (
-                set "IN_LOADING=1"
-                set "LOADING_FOUND=1"
-                echo !LINE!
-            ) else if "!LINE!"=="" (
-                set "IN_LOGGING_CONSOLE=0"
-                set "IN_LOADING=0"
-                echo.
-            ) else (
-                if !IN_LOGGING_CONSOLE! equ 1 (
-                    if "!LINE:~0,8!"=="Enabled " (
-                        echo Enabled = true
-                    ) else (
-                        echo !LINE!
-                    )
-                ) else if !IN_LOADING! equ 1 (
-                    if "!LINE:~0,12!"=="LoadPlugins " (
-                        echo LoadPlugins = true
-                    ) else (
-                        echo !LINE!
-                    )
-                ) else (
-                    echo !LINE!
-                )
-            )
-        )
-        if !CONSOLE_FOUND! equ 0 (
-            echo.
-            echo [Logging.Console]
-            echo Enabled = true
-        )
-        if !LOADING_FOUND! equ 0 (
-            echo.
-            echo [Loading]
-            echo LoadPlugins = true
-        )) > "!TEMP_CFG!"
-
-        move /y "!TEMP_CFG!" "!BEPINEX_CFG!" >nul
-        if !errorlevel! neq 0 (
-            call :HandleError "Config update failed" 6
-            endlocal
-            exit /b 6
-        )
-    )
-    endlocal
-    exit /b 0
-
+::===================================================================
+:: FUNCTION: INSTALL_BEPINEX_PACK
+:: Installs BepInEx mod loader and verifies installation
+:: USES: TEMP_DIR, EXTRACT_DIR, FOUND_PATH
+:: RETURNS: 0=Success, 2-9=Various installation errors
+::===================================================================
 :INSTALL_BEPINEX_PACK
     setlocal EnableDelayedExpansion
     call :Log "Starting BepInExPack installation..."
@@ -1279,13 +1135,13 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
     :: Use centralized API helper to get version info
     set "API_OUTPUT=%TEMP_DIR%\BepInExPack_api.txt"
-    call :CALL_THUNDERSTORE_API "bbepis" "BepInExPack" "!API_OUTPUT!"
+    call :CALL_THUNDERSTORE_API "BepInEx" "BepInExPack" "!API_OUTPUT!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
     )
 
-    :: Parse version and URL using type to pipe file contents to findstr
+    :: Parse version and URL
     for /f "tokens=2 delims==" %%a in ('type "!API_OUTPUT!" ^| findstr /B "VERSION="') do set "VERSION=%%a"
     for /f "tokens=2 delims==" %%a in ('type "!API_OUTPUT!" ^| findstr /B "URL="') do set "DOWNLOAD_URL=%%a"
     
@@ -1293,24 +1149,10 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     set "VERSION=!VERSION: =!"
     set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
-    :: Verify parsed values
-    if not defined VERSION (
-        call :HandleError "Failed to parse BepInExPack version" 10
-        endlocal
-        exit /b 10
-    )
-    
-    if not defined DOWNLOAD_URL (
-        call :HandleError "Failed to parse BepInExPack download URL" 10
-        endlocal
-        exit /b 10
-    )
-
     :: Setup paths
     set "ZIP_FILE=!TEMP_DIR!\BepInExPack_v!VERSION!.zip"
     set "EXTRACT_ROOT=!EXTRACT_DIR!\BepInEx"
-    set "SOURCE_DIR=!EXTRACT_ROOT!\BepInExPack"
-
+    
     :: Download BepInExPack
     call :Log "Downloading BepInExPack from: !DOWNLOAD_URL!"
     call :ColorEcho WHITE "* Downloading BepInExPack..."
@@ -1320,23 +1162,6 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         call :HandleError "Failed to download BepInExPack" 2 "!LOG_DIR!\BepInExPack_download.log"
         endlocal
         exit /b 2
-    )
-
-    :: Verify downloaded file
-    if not exist "!ZIP_FILE!" (
-        call :HandleError "BepInExPack download file not found" 3
-        endlocal
-        exit /b 3
-    )
-
-    :: Zero-byte file check
-    for %%A in ("!ZIP_FILE!") do (
-        if %%~zA LEQ 0 (
-            call :HandleError "Empty BepInExPack download file" 2
-            del "!ZIP_FILE!" 2>nul
-            endlocal
-            exit /b 2
-        )
     )
 
     :: Extract BepInExPack
@@ -1349,36 +1174,79 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
         exit /b 9
     )
 
+    :: Log the extracted contents for debugging
+    call :Log "Listing extracted contents:"
+    dir /s /b "!EXTRACT_ROOT!" >> "!LOG_FILE!"
+
+    :: Verify expected folder structure
+    set "BEPINPACK_ROOT=!EXTRACT_ROOT!\BepInExPack"
+    
+    if not exist "!BEPINPACK_ROOT!\doorstop_config.ini" (
+        call :HandleError "doorstop_config.ini not found in BepInExPack folder" 9
+        endlocal
+        exit /b 9
+    )
+
+    if not exist "!BEPINPACK_ROOT!\winhttp.dll" (
+        call :HandleError "winhttp.dll not found in BepInExPack folder" 9
+        endlocal
+        exit /b 9
+    )
+
+    if not exist "!BEPINPACK_ROOT!\BepInEx" (
+        call :HandleError "BepInEx folder not found in BepInExPack folder" 9
+        endlocal
+        exit /b 9
+    )
+
+    :: Ensure target directories exist
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\core"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers"
+
+    :: Copy root files (doorstop and winhttp)
+    call :Log "Copying BepInEx root files..."
+    call :ColorEcho WHITE "* Installing BepInEx root files..."
+    for %%F in (doorstop_config.ini winhttp.dll) do (
+        copy /Y "!BEPINPACK_ROOT!\%%F" "!FOUND_PATH!\%%F" >nul || (
+            call :HandleError "Failed to copy %%F to root folder" 8
+            endlocal
+            exit /b 8
+        )
+    )
+
     :: Copy BepInEx folder contents
-    call :Log "Copying BepInEx files to: !FOUND_PATH!"
-    robocopy "!SOURCE_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
+    call :Log "Copying BepInEx folder..."
+    robocopy "!BEPINPACK_ROOT!\BepInEx" "!FOUND_PATH!\BepInEx" ^
+        /E /COPYALL /R:0 /W:0 /NP ^
+        /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
     if !errorlevel! GEQ 8 (
-        call :Log "ERROR: Failed to copy BepInEx files"
-        call :ColorEcho RED "ERROR: Installation failed"
-        type "!LOG_DIR!\BepInExPack_install.log" >> "!LOG_FILE!"
+        call :HandleError "Failed to copy BepInEx folder" 8 ^
+            "!LOG_DIR!\BepInExPack_install.log"
         endlocal
         exit /b 8
     )
 
-    :: Copy root files
-    robocopy "!SOURCE_DIR!" "!FOUND_PATH!" "winhttp.dll" "doorstop_config.ini" "changelog.txt" /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
-    if !errorlevel! GEQ 8 (
-        call :Log "ERROR: Failed to copy BepInEx root files"
-        call :ColorEcho RED "ERROR: Installation failed"
-        type "!LOG_DIR!\BepInExPack_install.log" >> "!LOG_FILE!"
-        endlocal
-        exit /b 8
+    :: Verify critical files
+    set "MISSING_FILES="
+    set "MISSING_COUNT=0"
+    
+    for %%F in (
+        "!FOUND_PATH!\winhttp.dll"
+        "!FOUND_PATH!\doorstop_config.ini"
+        "!FOUND_PATH!\BepInEx\core\BepInEx.dll"
+        "!FOUND_PATH!\BepInEx\core\BepInEx.Preloader.dll"
+    ) do (
+        if not exist "%%~F" (
+            set "MISSING_FILES=!MISSING_FILES! %%~nxF"
+            set /a "MISSING_COUNT+=1"
+        )
     )
 
-    :: Create plugins folder if missing
-    if not exist "!FOUND_PATH!\BepInEx\plugins" (
-        mkdir "!FOUND_PATH!\BepInEx\plugins"
-        call :Log "Created missing BepInEx\plugins folder."
-    )
-
-    :: Configure BepInEx
-    call :ConfigureBepInEx
-    if !errorlevel! neq 0 (
+    if defined MISSING_FILES (
+        call :HandleError "Missing !MISSING_COUNT! critical BepInEx files:!MISSING_FILES!" 6
         endlocal
         exit /b 6
     )
@@ -1388,61 +1256,12 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: CLEANUP
-:: PURPOSE: Post-installation resource management
-:: RETENTION POLICY:
-::   - Preserves logs for troubleshooting
-::   - Removes temporary extraction files
-::   - Keeps backups until manual removal
-:: ======================================================================
-:CLEANUP
-    setlocal EnableDelayedExpansion
-    echo.
-
-    :: Remove temporary directories
-    rd /s /q "!EXTRACT_DIR!" 2>nul
-
-    :: Clean up zip files
-    del /f /q "!TEMP_DIR!\*.zip" 2>nul
-
-    :: Remove API response files
-    del /f /q "!TEMP_DIR!\*_api.txt" 2>nul
-    del /f /q "!TEMP_DIR!\*_response.json" 2>nul
-
-    :: Remove confirmation file
-    if exist "%CONFIRMATION_FILE%" (
-        del "%CONFIRMATION_FILE%" && (
-            call :Log "Cleaned up confirmation file"
-        ) || (
-            call :Log "WARNING: Failed to delete confirmation file" "console"
-        )
-    )
-
-    :: Clean up all log files except debug.log
-    for %%a in ("%LOG_DIR%\*.log") do (
-        set "file_name=%%~nxa"
-        if /i not "!file_name!"=="debug.log" (
-            del /f /q "%%a" 2>nul
-        )
-    )
-
-    endlocal
-
-    echo.
-    if %INSTALL_STATUS% equ 0 (
-        call :ColorEcho CYAN "Thanks for using Lethal Company Plus!"
-    ) else (
-        call :ColorEcho RED "Installation encountered errors. See log for details."
-    )
-    call :ColorEcho CYAN "Press any key to exit..."
-    pause >nul
-    exit /b %INSTALL_STATUS%
-
-:: ======================================================================
+::===================================================================
 :: FUNCTION: DownloadModlist
-:: PURPOSE: Downloads and parses modlist.ini
-:: ======================================================================
+:: Downloads and parses mod configuration
+:: MODIFIES: MOD_LIST
+:: RETURNS: 0=Success, 2=DownloadError, 14=NoValidMods
+::===================================================================
 :DownloadModlist
     setlocal EnableDelayedExpansion
     :: Delete existing modlist before download
@@ -1495,29 +1314,22 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     endlocal & set "MOD_LIST=%MOD_LIST%"
     exit /b 0
 
-:: ======================================================================
+::===================================================================
 :: FUNCTION: InitializeLogging
-:: ======================================================================
+:: Sets up logging system and initial log entry
+:: USES: LOG_FILE
+::===================================================================
 :InitializeLogging
     echo [%date% %time%] Lethal Company Plus installation started > "%LOG_FILE%"
     echo [%date% %time%] Initializing installer... >> "%LOG_FILE%"
     exit /b 0
 
-:: ======================================================================
-:: FUNCTION: EXTRACTFILES
-:: PURPOSE: Handles archive extraction with validation
-:: PARAMETERS:
-::   %1 - Source archive path
-::   %2 - Destination directory
-::   %3 - Mod name (for logging)
-:: GLOBALS MODIFIED:
-::   - LOG_FILE (appends extraction details)
-:: ERROR CODES:
-::   9 - Extraction failure
-:: NOTES:
-::   - Supports ZIP format only
-::   - Verifies extracted file structure
-:: ======================================================================
+::===================================================================
+:: FUNCTION: DownloadModlist
+:: Downloads and parses mod configuration
+:: MODIFIES: MOD_LIST
+:: RETURNS: 0=Success, 2=DownloadError, 14=NoValidMods
+::===================================================================
 :ExtractFiles
     setlocal EnableDelayedExpansion
     set "ZIP_FILE=%~1"

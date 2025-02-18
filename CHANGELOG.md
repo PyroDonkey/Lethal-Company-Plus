@@ -1,12 +1,22 @@
+## v1.8.0 (2025-02-17)
+
+### Features
+
+* Refined BepInExPack installation:
+    * Used the centralized `:CALL_THUNDERSTORE_API` function for fetching BepInExPack information.
+    * Added checks to verify the downloaded BepInExPack file and its structure.
+    * Ensured target directories exist before copying files.
+    * Improved file copying and verification.
+* Enhanced game path detection:
+    * Added more detailed debug logging.
+    * Improved registry checking and error handling.
+    * Refined Steam library folder search.
+    * Enhanced manual input handling and path sanitization.
+
 ## v1.7.0 (2025-02-17)
 
 ### Features
 
-* Enhanced mod installation logic:
-    * Switched to `powershell Invoke-RestMethod` for downloading mods.
-    * Refined directory handling for more flexible mod installation.
-    * Added special handling for files in the `BepInEx\Patchers` folder.
-    * Implemented a fallback mechanism using `powershell Copy-Item` for more reliable file copying.
 * Centralized Thunderstore API call logic in a new `:CALL_THUNDERSTORE_API` function.
 * Improved `:INSTALL_BEPINEX_PACK` function with centralized API calls and additional file checks.
 
