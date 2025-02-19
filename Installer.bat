@@ -2,10 +2,15 @@
 setlocal EnableDelayedExpansion
 
 :: =================================
+:: Initialization Entry Point
+:: =================================
+call :InitializeConfig
+
+:: =================================
 :: Global Configuration
 :: =================================
 :: Core installation state tracking
-set "INSTALL_STATUS = 0"
+set "INSTALL_STATUS=0"
 set "FOUND_PATH="
 set "VERSION_FILE="
 set "BACKUP_DIR="
@@ -28,8 +33,8 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.8.0"
-set "LAST_MODIFIED=2025-02-17"
+set "VERSION=1.8.1"
+set "LAST_MODIFIED=2025-02-19"
 
 :: Error code descriptions
 set "ERROR_CODE_1=General/unexpected error"
@@ -50,10 +55,6 @@ set "ERROR_CODE_14=Mod installation failure"
 :: Mod-specific variables
 set "MOD_AUTHOR="
 set "DOWNLOAD_URL="
-set "ZIP_FILE="
-set "MOD_EXTRACT_DIR="
-set "INSTALL_DIR="
-set "SOURCE_DIR="
 
 :: Temporary working variables
 set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
@@ -82,6 +83,64 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
     exit /b 0
 
 ::===================================================================
+:: FUNCTION: INITIALIZECONFIG
+:: Centralized configuration management
+:: MODIFIES: All global configuration variables
+::===================================================================
+:InitializeConfig
+    :: Core installation state tracking
+    set "INSTALL_STATUS=0"
+    set "FOUND_PATH="
+    set "VERSION_FILE="
+    set "BACKUP_DIR="
+
+    :: Temporary workspace configuration
+    set "TEMP_DIR=%TEMP%\LCPlusInstall"
+    set "LOG_DIR=%TEMP_DIR%\logs"
+    set "LOG_FILE=%LOG_DIR%\debug.log" 
+    set "EXTRACT_DIR=%TEMP_DIR%\extracted"
+    set "MOD_COUNT=0"
+
+    :: Version Information 
+    set "VERSION=1.8.0"
+    set "LAST_MODIFIED=2025-02-17"
+
+    :: ANSI color control (initialized empty, populated later)
+    set "ESC="
+    set "GREEN="
+    set "YELLOW="
+    set "RED="
+    set "BLUE="
+    set "CYAN="
+    set "WHITE="
+    set "RESET="
+
+    :: Load error code definitions
+    call :DefineErrorCodes
+exit /b 0
+
+::===================================================================
+:: FUNCTION: DEFINEERRORCODES
+:: Centralized error code definitions
+::===================================================================
+:DefineErrorCodes
+    set "ERROR_CODE_1=General/unexpected error"
+    set "ERROR_CODE_2=Network communication failure"
+    set "ERROR_CODE_3=File/directory not found"
+    set "ERROR_CODE_4=Insufficient disk space"
+    set "ERROR_CODE_5=Backup/restore operation failure"
+    set "ERROR_CODE_6=BepInEx configuration error"
+    set "ERROR_CODE_7=Registry access failure"
+    set "ERROR_CODE_8=File operation failure (copy/delete)"
+    set "ERROR_CODE_9=Archive extraction failure"
+    set "ERROR_CODE_10=Invalid API response"
+    set "ERROR_CODE_11=User input validation failed"
+    set "ERROR_CODE_12=Permission denied"
+    set "ERROR_CODE_13=Invalid game installation path"
+    set "ERROR_CODE_14=Mod installation failure"
+exit /b 0
+
+::===================================================================
 :: FUNCTION: CONTINUE_INITIALIZATION
 :: Sets up working directories and environment
 :: MODIFIES: INSTALL_STATUS
@@ -90,7 +149,7 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 :CONTINUE_INITIALIZATION
     call :CREATE_DIRECTORY "%TEMP_DIR%" || (
         call :HandleError "Failed to create temp directory: %TEMP_DIR%" 3
-        set INSTALL_STATUS = 3
+        set INSTALL_STATUS=3
         goto :CLEANUP
     )
     
@@ -108,15 +167,6 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
     :: Initialize log file AFTER directory creation
     call :InitializeLogging
-
-    :: Initialize installation status and paths
-    set "INSTALL_STATUS=0"
-    set "TEMP_DIR=%TEMP%\LCPlusInstall"
-    set "LOG_DIR=%TEMP_DIR%\logs"
-    set "LOG_FILE=%LOG_DIR%\debug.log"
-    set "EXTRACT_DIR=%TEMP_DIR%\extracted"
-    set "FOUND_PATH="
-    set "VERSION_FILE="
 
     :: Enable ANSI support and set up colors
     reg add "HKCU\Software\Microsoft\Command Processor" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
