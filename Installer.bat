@@ -147,21 +147,15 @@ exit /b 0
 :: RETURNS: 0=Success, 3=DirectoryError
 ::===================================================================
 :CONTINUE_INITIALIZATION
-    call :CREATE_DIRECTORY "%TEMP_DIR%" || (
-        call :HandleError "Failed to create temp directory: %TEMP_DIR%" 3
-        set INSTALL_STATUS=3
+    call :CREATE_DIRECTORY "%TEMP_DIR%" "Failed to create temp directory: %TEMP_DIR%" || (
         goto :CLEANUP
     )
     
-    call :CREATE_DIRECTORY "%LOG_DIR%" || (
-        call :HandleError "Failed to create log directory: %LOG_DIR%" 3 
-        set INSTALL_STATUS=3
+    call :CREATE_DIRECTORY "%LOG_DIR%" "Failed to create log directory: %LOG_DIR%" || (
         goto :CLEANUP
     )
     
-    call :CREATE_DIRECTORY "%EXTRACT_DIR%" || (
-        call :HandleError "Failed to create extraction directory: %EXTRACT_DIR%" 3
-        set INSTALL_STATUS=3
+    call :CREATE_DIRECTORY "%EXTRACT_DIR%" "Failed to create extraction directory: %EXTRACT_DIR%" || (
         goto :CLEANUP
     )
 
@@ -321,7 +315,7 @@ exit /b 0
     call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
     call :DownloadFile "!DOWNLOAD_URL!" "!ZIP_FILE!" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
     if !errorlevel! neq 0 (
-        call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
+        call :HandleError "Download failed for !MOD_NAME!" 2 "!LOG_DIR!\!MOD_NAME!_download.log" "MOD_NAME DOWNLOAD_URL ZIP_FILE"
         endlocal
         exit /b 2
     )
@@ -330,8 +324,7 @@ exit /b 0
     if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!"
 
     :: Create fresh extract directory
-    mkdir "!MOD_EXTRACT_DIR!" 2>nul || (
-        call :HandleError "Failed to create extraction directory for !MOD_NAME!" 3
+    call :CREATE_DIRECTORY "!MOD_EXTRACT_DIR!" "Failed to create mod extract directory: !MOD_EXTRACT_DIR!" || (
         endlocal
         exit /b 3
     )
@@ -357,12 +350,9 @@ exit /b 0
     )
 
     :: Create installation directory
-    if not exist "!INSTALL_DIR!" (
-        mkdir "!INSTALL_DIR!" 2>nul || (
-            call :HandleError "Failed to create installation directory for !MOD_NAME!" 8
-            endlocal
-            exit /b 8
-        )
+    call :CREATE_DIRECTORY "!INSTALL_DIR!" "Failed to create mod install directory: !INSTALL_DIR!" || (
+        endlocal
+        exit /b 8
     )
 
     :: Initialize counter
@@ -423,7 +413,7 @@ exit /b 0
                 set /a "FILES_COPIED+=1"
                 call :Log "Alternate copy successful for %%~nxF"
             ) else (
-                call :HandleError "Failed to copy %%~nxF (both methods failed)" 8
+                call :HandleError "Failed to copy %%~nxF (both methods failed)" 8 "MOD_NAME FILE_NAME DEST_PATH"
                 endlocal
                 exit /b 8
             )
@@ -495,15 +485,16 @@ exit /b 0
 ::===================================================================
 :: FUNCTION: CREATE_DIRECTORY
 :: Creates directory with error handling
-:: PARAMS: %1=DirectoryPath
+:: PARAMS: %1=DirectoryPath, %2=Error message
 :: RETURNS: 0=Success, 3=CreateError
 ::===================================================================
 :CREATE_DIRECTORY
     setlocal
     set "DIR_PATH=%~1"
+    set "ERR_MSG=%~2"
     if not exist "%DIR_PATH%" (
         mkdir "%DIR_PATH%" 2>nul || (
-            call :HandleError "Failed to create directory: %DIR_PATH%" 3
+            call :HandleError "!ERR_MSG!" 3
             endlocal
             exit /b 3
         )
@@ -546,7 +537,7 @@ exit /b 0
 ::===================================================================
 :: FUNCTION: HandleError
 :: Processes and logs error conditions
-:: PARAMS: %1=Description, %2=Code, %3=LogFile
+:: PARAMS: %1=Description, %2=Code, %3=LogFile, %4=ContextVars
 :: MODIFIES: INSTALL_STATUS
 :: RETURNS: Provided error code
 ::===================================================================
@@ -555,6 +546,7 @@ exit /b 0
     set "ERROR_DESCRIPTION=%~1"
     set "ERROR_CATEGORY_CODE=%~2"
     set "ERROR_LOG=%~3"
+    set "VAR_LIST=%~4"
 
     :: Get error description from code
     set "ERROR_CODE_DESC=!ERROR_CODE_%ERROR_CATEGORY_CODE%!"
@@ -562,6 +554,18 @@ exit /b 0
     :: Enhanced error formatting
     call :Log "ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION! (!ERROR_CODE_DESC!)" "console"
     call :ColorEcho RED "X ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION! (!ERROR_CODE_DESC!)"
+
+    :: Log context variables if provided
+    if defined VAR_LIST (
+        call :Log "Error context variables:" "console"
+        for %%V in (!VAR_LIST!) do (
+            if defined %%V (
+                call :Log "  %%V=!%%V!" "console"
+            ) else (
+                call :Log "  %%V=<undefined>" "console"
+            )
+        )
+    )
 
     :: Include log file contents if provided
     if defined ERROR_LOG (
@@ -609,7 +613,7 @@ exit /b 0
             "exit 1 " ^
         "}" >nul 2>&1
     if !errorlevel! neq 0 (
-        call :HandleError "PowerShell 5.0 or higher required" 1
+        call :HandleError "PowerShell 5.0 or higher required" 1 "" "OS%OS% PROCESSOR_ARCHITECTURE%PROCESSOR_ARCHITECTURE%"
         endlocal
         exit /b 1
     )
@@ -926,7 +930,7 @@ exit /b 0
     set "TEMP_CFG=!TEMP_DIR!\version_temp.cfg"
 
     :: Create config directory if it doesn't exist
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" || (
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" "Failed to create BepInEx config directory" || (
         endlocal
         exit /b 6
     )
@@ -1087,11 +1091,11 @@ exit /b 0
         "}"
 
     if !errorlevel! equ 2 (
-        call :HandleError "Network error fetching !MOD_NAME! info" 2 "!API_LOG!"
+        call :HandleError "Network error fetching !MOD_NAME! info" 2 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
         endlocal
         exit /b 2
     ) else if !errorlevel! equ 10 (
-        call :HandleError "Invalid API response for !MOD_NAME!" 10 "!API_LOG!"
+        call :HandleError "Invalid API response for !MOD_NAME!" 10 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
         endlocal
         exit /b 10
     )
@@ -1146,7 +1150,7 @@ exit /b 0
 
     :: Check for download errors
     if !errorlevel! neq 0 (
-        call :HandleError "Download failed for !MOD_NAME! ([!URL!])" 2 "!LOG_DIR!\!MOD_NAME!_download.log"
+        call :HandleError "Download failed for !MOD_NAME! ([!URL!])" 2 "!LOG_DIR!\!MOD_NAME!_download.log" "MOD_NAME DOWNLOAD_URL ZIP_FILE"
         endlocal
         exit /b 2
     )
@@ -1250,11 +1254,11 @@ exit /b 0
     )
 
     :: Ensure target directories exist
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\core"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx" "Failed to create BepInEx directory"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\core" "Failed to create BepInEx core directory"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" "Failed to create BepInEx config directory"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins" "Failed to create BepInEx plugins directory"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers" "Failed to create BepInEx patchers directory"
 
     :: Copy root files (doorstop and winhttp)
     call :Log "Copying BepInEx root files..."
@@ -1305,6 +1309,57 @@ exit /b 0
     call :ColorEcho GREEN "✓ BepInExPack installed successfully"
     endlocal
     exit /b 0
+
+:: ======================================================================
+:: FUNCTION: CLEANUP
+:: PURPOSE: Post-installation resource management
+:: RETENTION POLICY:
+::   - Preserves logs for troubleshooting
+::   - Removes temporary extraction files
+::   - Keeps backups until manual removal
+:: ======================================================================
+:CLEANUP
+    setlocal EnableDelayedExpansion
+    echo.
+
+    :: Remove temporary directories
+    rd /s /q "!EXTRACT_DIR!" 2>nul
+
+    :: Clean up zip files
+    del /f /q "!TEMP_DIR!\*.zip" 2>nul
+
+    :: Remove API response files
+    del /f /q "!TEMP_DIR!\*_api.txt" 2>nul
+    del /f /q "!TEMP_DIR!\*_response.json" 2>nul
+
+    :: Remove confirmation file
+    if exist "%CONFIRMATION_FILE%" (
+        del "%CONFIRMATION_FILE%" && (
+            call :Log "Cleaned up confirmation file"
+        ) || (
+            call :Log "WARNING: Failed to delete confirmation file" "console"
+        )
+    )
+
+    :: Clean up all log files except debug.log
+    for %%a in ("%LOG_DIR%\*.log") do (
+        set "file_name=%%~nxa"
+        if /i not "!file_name!"=="debug.log" (
+            del /f /q "%%a" 2>nul
+        )
+    )
+
+    endlocal
+
+    echo.
+    if %INSTALL_STATUS% equ 0 (
+        call :ColorEcho CYAN "Thanks for using Lethal Company Plus!"
+    ) else (
+        call :ColorEcho RED "Installation encountered errors. See log for details."
+    )
+    call :ColorEcho CYAN "Press any key to exit..."
+    pause >nul
+    exit /b %INSTALL_STATUS%
 
 ::===================================================================
 :: FUNCTION: DownloadModlist
@@ -1375,10 +1430,10 @@ exit /b 0
     exit /b 0
 
 ::===================================================================
-:: FUNCTION: DownloadModlist
-:: Downloads and parses mod configuration
-:: MODIFIES: MOD_LIST
-:: RETURNS: 0=Success, 2=DownloadError, 14=NoValidMods
+:: FUNCTION: ExtractFiles
+:: Extracts files from a ZIP archive
+:: PARAMS: %1=ZIP file, %2=Destination directory, %3=Mod name
+:: RETURNS: 0=Success, 3=ExtractError
 ::===================================================================
 :ExtractFiles
     setlocal EnableDelayedExpansion
