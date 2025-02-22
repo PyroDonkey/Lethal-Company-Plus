@@ -22,7 +22,7 @@ set "WHITE="
 set "RESET="
 
 :: Version Information 
-set "VERSION=1.8.1"
+set "VERSION=1.8.0"
 set "LAST_MODIFIED=2025-02-19"
 
 :: Temporary working variables
@@ -232,13 +232,49 @@ exit /b 0
     endlocal
     exit /b 0
 
+:: =====================================================================
+:: FUNCTION: GetModInfo
+:: PURPOSE: Retrieves mod version and download URL from Thunderstore API
+:: PARAMS: %1=Author, %2=ModName
+:: RETURNS: Sets MOD_VERSION and DOWNLOAD_URL, or errorlevel on failure
+:: =====================================================================
+:GetModInfo
+    setlocal EnableDelayedExpansion
+    set "MOD_AUTHOR=%~1"
+    set "MOD_NAME=%~2"
+
+    :: Set up API output file path
+    set "API_OUTPUT=%TEMP_DIR%\!MOD_NAME!_api.txt"
+
+    :: Call API helper to get version info
+    call :CALL_THUNDERSTORE_API "!MOD_AUTHOR!" "!MOD_NAME!" "!API_OUTPUT!"
+    if !errorlevel! neq 0 (
+        endlocal
+        exit /b !errorlevel!
+    )
+
+    :: Parse version and URL from API response
+    for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!API_OUTPUT!"') do set "MOD_VERSION=%%a"
+    for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!API_OUTPUT!"') do set "DOWNLOAD_URL=%%a"
+
+    :: Remove any spaces from parsed values
+    set "MOD_VERSION=!MOD_VERSION: =!"
+    set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
+
+    :: Return values to calling function
+    endlocal & (
+        set "MOD_VERSION=%MOD_VERSION%"
+        set "DOWNLOAD_URL=%DOWNLOAD_URL%"
+    )
+    exit /b 0
+
 ::===================================================================
 :: FUNCTION: InstallSingleMod
-:: Handles installation of individual mod
+:: PURPOSE: Handles installation of individual mod
 :: PARAMS: %1=Author, %2=ModName, %3=Index
 :: RETURNS: 0=Success, Various installation error codes
 ::===================================================================
-:INSTALLSINGLEMOD
+:InstallSingleMod
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
     set "MOD_NAME=%~2"
@@ -248,19 +284,12 @@ exit /b 0
     set "MOD_INDEX_PADDED=0!MOD_INDEX!"
     set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
 
-    :: Use centralized API helper to get version info
-    set "API_OUTPUT=%TEMP_DIR%\!MOD_NAME!_api.txt"
-    call :CALL_THUNDERSTORE_API "!MOD_AUTHOR!" "!MOD_NAME!" "!API_OUTPUT!"
+    :: Get mod version and download URL
+    call :GetModInfo "!MOD_AUTHOR!" "!MOD_NAME!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
     )
-
-    :: Parse version and URL
-    for /f "tokens=2 delims==" %%a in ('findstr /B "VERSION" "!API_OUTPUT!"') do set "MOD_VERSION=%%a"
-    for /f "tokens=2 delims==" %%a in ('findstr /B "URL" "!API_OUTPUT!"') do set "DOWNLOAD_URL=%%a"
-    set "MOD_VERSION=!MOD_VERSION: =!"
-    set "DOWNLOAD_URL=!DOWNLOAD_URL: =!"
 
     :: Setup file paths
     set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
@@ -285,22 +314,9 @@ exit /b 0
         exit /b 3
     )
 
-    :: Display the extracting message
-    call :ColorEcho WHITE "* Extracting !MOD_NAME!..."
-
     :: Extract mod
-    powershell -Command "$ErrorActionPreference = 'Stop';" ^
-        "try {" ^
-            "Expand-Archive -Path '!ZIP_FILE!'" ^
-            " -DestinationPath '!MOD_EXTRACT_DIR!'" ^
-            " -Force" ^
-        "} catch {" ^
-            "Write-Error $_.Exception.Message;" ^
-            "exit 1" ^
-        "}" 2>"!LOG_DIR!\!MOD_NAME!_extract.log"
-
+    call :ExtractFiles "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
     if !errorlevel! neq 0 (
-        call :HandleError 9 "!LOG_DIR!\!MOD_NAME!_extract.log" "MOD_NAME"
         endlocal
         exit /b 9
     )
@@ -344,35 +360,13 @@ exit /b 0
             call :Log "Found patcher file: !FILE_NAME! - redirecting to Patchers folder"
         )
 
-        :: Copy file to appropriate destination
-        call :Log "Copying !FILE_NAME! to !DEST_PATH!"
-        copy /Y "%%F" "!DEST_PATH!" >nul
-        
-        :: Check copy error level
+        :: Copy file using helper function
+        call :CopyFile "%%F" "!DEST_PATH!" "!MOD_NAME!"
         if !errorlevel! equ 0 (
             set /a "FILES_COPIED+=1"
-            call :Log "Successfully copied %%~nxF"
         ) else (
-            call :Log "Copy failed (error !errorlevel!), attempting alternate copy method..."
-            
-            :: Use PowerShell with admin privileges for fallback
-            powershell -Command "$ErrorActionPreference = 'Stop';" ^
-                "try {" ^
-                    "Copy-Item -Path '%%F'" ^
-                    " -Destination '!DEST_PATH!'" ^
-                    " -Force" ^
-                "} catch {" ^
-                    "exit 1" ^
-                "}" 2>"!LOG_DIR!\!MOD_NAME!_copy_alt.log"
-
-            if !errorlevel! equ 0 (
-                set /a "FILES_COPIED+=1"
-                call :Log "Alternate copy successful for %%~nxF"
-            ) else (
-                call :HandleError 8 "" "FILE_NAME DEST_PATH"
-                endlocal
-                exit /b 8
-            )
+            endlocal
+            exit /b 8
         )
     )
 
@@ -457,9 +451,6 @@ exit /b 0
         exit /b 0
     )
 
-    :: --------------------------------
-    :: Backup Management Section
-    :: --------------------------------
     :: Initialize backup tracking variables
     set "BACKUP_COUNT=0"
     set "LATEST_BACKUP="
@@ -1106,13 +1097,13 @@ exit /b 0
     endlocal
     exit /b 0
 
-:: =====================================================================
-:: FUNCTION: DOWNLOADFILE
-:: PURPOSE: Downloads file from URL with error handling
+::===================================================================
+:: FUNCTION: DownloadFile
+:: PURPOSE: Downloads file from URL with error handling and timeout
 :: PARAMS: %1=URL, %2=Output path
 :: MODIFIES: None
 :: RETURNS: 0=Success, 2=Download failure
-:: =====================================================================
+::===================================================================
 :DownloadFile
     setlocal EnableDelayedExpansion
     set "URL=%~1"
@@ -1123,7 +1114,15 @@ exit /b 0
             "$ProgressPreference = 'SilentlyContinue';" ^
             "$webClient = New-Object System.Net.WebClient;" ^
             "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
-            "$webClient.DownloadFile('%URL%', '%OUTPUT%') " ^
+            "$job = Start-Job -ScriptBlock {" ^
+                "param($url, $output)" ^
+                "(New-Object System.Net.WebClient).DownloadFile($url, $output)" ^
+            "} -ArgumentList '%URL%','%OUTPUT%';" ^
+            "if (-not (Wait-Job $job -Timeout 30)) {" ^
+                "Remove-Job -Force $job;" ^
+                "throw 'Download timed out after 30 seconds'" ^
+            "}" ^
+            "Receive-Job $job" ^
         "} catch { " ^
             "Write-Host $_.Exception.Message 2>&1 | Out-Null; " ^
             "exit 1 " ^
@@ -1252,7 +1251,59 @@ exit /b 0
 
     endlocal
     exit /b 0
+
+::===================================================================
+:: FUNCTION: COPYFILE
+:: PURPOSE: Copies a file with fallback and error handling
+:: PARAMS: %1=Source path, %2=Destination path, %3=Mod name
+:: USES: LOG_DIR
+:: RETURNS: 0=Success, 8=CopyError
+::===================================================================
+:CopyFile
+    setlocal EnableDelayedExpansion
+    set "SOURCE=%~1"
+    set "DEST=%~2"
+    set "MOD_NAME=%~3"
     
+    :: Log the copy operation
+    call :Log "Copying file for !MOD_NAME!: '!SOURCE!' -> '!DEST!'"
+    
+    :: Attempt standard copy first
+    copy /Y "!SOURCE!" "!DEST!" >nul
+    if !errorlevel! equ 0 (
+        call :Log "Successfully copied file using copy command"
+        endlocal
+        exit /b 0
+    )
+    
+    :: Log failure and attempt PowerShell fallback
+    call :Log "Standard copy failed, attempting PowerShell fallback..."
+    
+    :: Create log file path for PowerShell operation
+    set "PS_LOG=!LOG_DIR!\!MOD_NAME!_copy_ps.log"
+    
+    :: Attempt PowerShell copy with full error handling
+    powershell -Command "$ErrorActionPreference = 'Stop';" ^
+        "try {" ^
+            "Copy-Item -Path '!SOURCE!'" ^
+            " -Destination '!DEST!'" ^
+            " -Force" ^
+        "} catch {" ^
+            "$_.Exception.Message | Out-File '!PS_LOG!';" ^
+            "exit 1" ^
+        "}" 2>"!PS_LOG!"
+    
+    if !errorlevel! equ 0 (
+        call :Log "Successfully copied file using PowerShell fallback"
+        endlocal
+        exit /b 0
+    )
+    
+    :: If both copy methods failed, handle the error
+    call :HandleError 8 "!PS_LOG!" "SOURCE DEST MOD_NAME"
+    endlocal
+    exit /b 8
+
 :: =====================================================================
 :: FUNCTION: DOWNLOADMOD
 :: PURPOSE: Downloads and validates specific mod package
