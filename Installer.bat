@@ -269,34 +269,24 @@ exit /b 0
     exit /b 0
 
 ::===================================================================
-:: FUNCTION: InstallSingleMod
-:: PURPOSE: Handles installation of individual mod
-:: PARAMS: %1=Author, %2=ModName, %3=Index
-:: RETURNS: 0=Success, Various installation error codes
+:: FUNCTION: DOWNLOADANDEXTRACTMOD
+:: PURPOSE: Downloads and extracts a specific mod package
+:: PARAMS: %1=Author, %2=ModName, %3=Version, %4=DownloadURL
+:: USES: TEMP_DIR, EXTRACT_DIR, LOG_DIR
+:: RETURNS: 0=Success, 2=DownloadError, 3=DirectoryError, 9=ExtractError
 ::===================================================================
-:InstallSingleMod
+:DownloadAndExtractMod
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
     set "MOD_NAME=%~2"
-    set "MOD_INDEX=%~3"
-    
-    :: Create padded index for sorted load order
-    set "MOD_INDEX_PADDED=0!MOD_INDEX!"
-    set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
-
-    :: Get mod version and download URL
-    call :GetModInfo "!MOD_AUTHOR!" "!MOD_NAME!"
-    if !errorlevel! neq 0 (
-        endlocal
-        exit /b !errorlevel!
-    )
+    set "MOD_VERSION=%~3"
+    set "DOWNLOAD_URL=%~4"
 
     :: Setup file paths
     set "ZIP_FILE=!TEMP_DIR!\!MOD_NAME!_v!MOD_VERSION!.zip"
     set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
-    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
 
-    :: Download mod using centralized download function
+    :: Download mod
     call :ColorEcho WHITE "* Downloading !MOD_NAME!..."
     call :DownloadFile "!DOWNLOAD_URL!" "!ZIP_FILE!" 2>"!LOG_DIR!\!MOD_NAME!_download.log"
     if !errorlevel! neq 0 (
@@ -321,8 +311,53 @@ exit /b 0
         exit /b 9
     )
 
-    :: Create installation directory
-    call :CREATE_DIRECTORY "!INSTALL_DIR!" "Failed to create mod install directory: !INSTALL_DIR!" || (
+    endlocal
+    exit /b 0
+
+::===================================================================
+:: FUNCTION: INSTALLSINGLEMOD
+:: PURPOSE: Handles installation of individual mod
+:: PARAMS: %1=Author, %2=ModName, %3=Index
+:: RETURNS: 0=Success, Various installation error codes
+::===================================================================
+:InstallSingleMod
+    setlocal EnableDelayedExpansion
+    set "MOD_AUTHOR=%~1"
+    set "MOD_NAME=%~2"
+    set "MOD_INDEX=%~3"
+    
+    :: Create padded index for sorted load order
+    set "MOD_INDEX_PADDED=0!MOD_INDEX!"
+    set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
+
+    :: Get mod version and download URL
+    call :GetModInfo "!MOD_AUTHOR!" "!MOD_NAME!"
+    if !errorlevel! neq 0 (
+        endlocal
+        exit /b !errorlevel!
+    )
+
+    :: Setup paths
+    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
+    set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
+
+    :: Download and extract the mod using helper
+    call :DownloadAndExtractMod "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!" "!DOWNLOAD_URL!"
+    if !errorlevel! neq 0 (
+        endlocal
+        exit /b !errorlevel!
+    )
+
+    :: Verify extraction directory exists
+    if not exist "!MOD_EXTRACT_DIR!" (
+        call :HandleError 3 "" "MOD_EXTRACT_DIR"
+        endlocal
+        exit /b 3
+    )
+
+    :: Create mod's plugin directory
+    call :CREATE_DIRECTORY "!INSTALL_DIR!" || (
+        call :HandleError 8 "" "INSTALL_DIR"
         endlocal
         exit /b 8
     )
@@ -330,24 +365,21 @@ exit /b 0
     :: Initialize counter
     set "FILES_COPIED=0"
 
-    :: Determine the base directory for installation
+    :: Determine source directory and process files
     set "SOURCE_BASE=!MOD_EXTRACT_DIR!"
     if exist "!MOD_EXTRACT_DIR!\BepInEx" (
         set "SOURCE_BASE=!MOD_EXTRACT_DIR!\BepInEx"
-        set "INSTALL_BASE=!FOUND_PATH!\BepInEx"
-        call :Log "Found BepInEx folder at root of mod; installing to game's BepInEx folder."
-    ) else (
-        set "INSTALL_BASE=!FOUND_PATH!"
-        call :Log "No BepInEx folder found at root of mod; installing to game's root folder."
     )
 
-    :: Process all files and flatten them into the mod directory
+    :: Process all files
     for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
-        :: Get just filename without path
+        :: Get just filename
         for %%A in ("%%F") do set "FILE_NAME=%%~nxA"
         
-        :: Patchers folder exception handling
+        :: Default destination is mod's plugin directory
         set "DEST_PATH=!INSTALL_DIR!\!FILE_NAME!"
+
+        :: Check for patchers (case-insensitive)
         echo "%%F" | findstr /i "\\BepInEx\\Patchers\\" >nul
         if !errorlevel! equ 0 (
             set "PATCHERS_DIR=!FOUND_PATH!\BepInEx\Patchers"
@@ -357,10 +389,10 @@ exit /b 0
                 exit /b 8
             )
             set "DEST_PATH=!PATCHERS_DIR!\!FILE_NAME!"
-            call :Log "Found patcher file: !FILE_NAME! - redirecting to Patchers folder"
+            call :Log "Found patcher file: !FILE_NAME!"
         )
 
-        :: Copy file using helper function
+        :: Copy file
         call :CopyFile "%%F" "!DEST_PATH!" "!MOD_NAME!"
         if !errorlevel! equ 0 (
             set /a "FILES_COPIED+=1"
@@ -370,20 +402,17 @@ exit /b 0
         )
     )
 
-    :: Verify installation
+    :: Verify at least one file copied
     if !FILES_COPIED! equ 0 (
         call :HandleError 8 "" "MOD_NAME"
         endlocal
         exit /b 8
     )
 
-    :: Record version information
+    :: Record version (continues even if this fails)
     call :WriteVersionInfo "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!"
-    if !errorlevel! neq 0 (
-        call :HandleError 6 "" "MOD_NAME"
-    )
 
-    :: Clean up extracted files
+    :: Clean up
     rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
 
     call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION! ^(!FILES_COPIED! files^)"
