@@ -329,71 +329,84 @@ exit /b 0
     :: Create padded index for sorted load order
     set "MOD_INDEX_PADDED=0!MOD_INDEX!"
     set "MOD_INDEX_PADDED=!MOD_INDEX_PADDED:~-2!"
-
+    
     :: Get mod version and download URL
     call :GetModInfo "!MOD_AUTHOR!" "!MOD_NAME!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
     )
-
+    
     :: Setup paths
     set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
     set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
-
+    
     :: Download and extract the mod using helper
     call :DownloadAndExtractMod "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!" "!DOWNLOAD_URL!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
     )
-
+    
     :: Verify extraction directory exists
     if not exist "!MOD_EXTRACT_DIR!" (
         call :HandleError 3 "" "MOD_EXTRACT_DIR"
         endlocal
         exit /b 3
     )
-
-    :: Create mod's plugin directory
+    
+    :: Create required directories
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins" || (
+        call :HandleError 8 "" "PLUGINS_DIR"
+        endlocal
+        exit /b 8
+    )
+    
     call :CREATE_DIRECTORY "!INSTALL_DIR!" || (
         call :HandleError 8 "" "INSTALL_DIR"
         endlocal
         exit /b 8
     )
-
-    :: Initialize counter
+    
+    :: Initialize counters and flags
     set "FILES_COPIED=0"
-
-    :: Determine source directory and process files
-    set "SOURCE_BASE=!MOD_EXTRACT_DIR!"
-    if exist "!MOD_EXTRACT_DIR!\BepInEx" (
-        set "SOURCE_BASE=!MOD_EXTRACT_DIR!\BepInEx"
+    set "HAS_PATCHERS=0"
+    
+    :: First pass - identify if we have patcher files
+    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
+        echo "%%F" | findstr /i "\\patchers\\" >nul
+        if !errorlevel! equ 0 (
+            set "HAS_PATCHERS=1"
+        )
     )
-
+    
+    :: Create patchers directory if needed
+    if !HAS_PATCHERS! equ 1 (
+        call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers" || (
+            call :HandleError 8 "" "PATCHERS_DIR"
+            endlocal
+            exit /b 8
+        )
+    )
+    
     :: Process all files
     for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
-        :: Get just filename
-        for %%A in ("%%F") do set "FILE_NAME=%%~nxA"
+        :: Get relative path and filename
+        set "FULL_PATH=%%F"
+        set "FILE_NAME=%%~nxF"
         
         :: Default destination is mod's plugin directory
         set "DEST_PATH=!INSTALL_DIR!\!FILE_NAME!"
-
-        :: Check for patchers (case-insensitive)
-        echo "%%F" | findstr /i "\\BepInEx\\Patchers\\" >nul
+        
+        :: Check for patcher files (case-insensitive)
+        echo "!FULL_PATH!" | findstr /i "\\patchers\\" >nul
         if !errorlevel! equ 0 (
-            set "PATCHERS_DIR=!FOUND_PATH!\BepInEx\Patchers"
-            call :CREATE_DIRECTORY "!PATCHERS_DIR!" || (
-                call :HandleError 8
-                endlocal
-                exit /b 8
-            )
-            set "DEST_PATH=!PATCHERS_DIR!\!FILE_NAME!"
+            set "DEST_PATH=!FOUND_PATH!\BepInEx\patchers\!FILE_NAME!"
             call :Log "Found patcher file: !FILE_NAME!"
         )
-
+        
         :: Copy file
-        call :CopyFile "%%F" "!DEST_PATH!" "!MOD_NAME!"
+        call :CopyFile "!FULL_PATH!" "!DEST_PATH!" "!MOD_NAME!"
         if !errorlevel! equ 0 (
             set /a "FILES_COPIED+=1"
         ) else (
@@ -401,20 +414,20 @@ exit /b 0
             exit /b 8
         )
     )
-
-    :: Verify at least one file copied
+    
+    :: Verify at least one file was copied
     if !FILES_COPIED! equ 0 (
-        call :HandleError 8 "" "MOD_NAME"
+        call :HandleError 8 "" "No files copied for !MOD_NAME!"
         endlocal
         exit /b 8
     )
-
+    
     :: Record version (continues even if this fails)
     call :WriteVersionInfo "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!"
-
+    
     :: Clean up
     rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
-
+    
     call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION! ^(!FILES_COPIED! files^)"
     endlocal
     exit /b 0
