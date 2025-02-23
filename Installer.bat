@@ -296,7 +296,7 @@ exit /b 0
     )
 
     :: Clean extract directory if it exists
-    if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!"
+    rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
 
     :: Create fresh extract directory
     call :CREATE_DIRECTORY "!MOD_EXTRACT_DIR!" "Failed to create mod extract directory: !MOD_EXTRACT_DIR!" || (
@@ -315,11 +315,99 @@ exit /b 0
     exit /b 0
 
 ::===================================================================
+:: FUNCTION: INSTALLMODFILES
+:: PURPOSE: Handles mod file installation logic
+:: PARAMS: %1=Author, %2=ModName, %3=Version, %4=PaddedIndex
+:: RETURNS: 0=Success, 8=FileError
+::===================================================================
+:InstallModFiles
+    setlocal EnableDelayedExpansion
+    set "MOD_AUTHOR=%~1"
+    set "MOD_NAME=%~2"
+    set "MOD_VERSION=%~3"
+    set "MOD_INDEX_PADDED=%~4"
+    
+    :: Setup paths
+    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
+    set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
+    set "PATCHERS_DIR=!FOUND_PATH!\BepInEx\patchers"
+
+    :: Create plugin directory
+    call :CREATE_DIRECTORY "!INSTALL_DIR!" || (
+        call :HandleError 8 "" "Failed to create plugin directory: !INSTALL_DIR!"
+        endlocal
+        exit /b 8
+    )
+
+    :: Initialize counters
+    set "FILES_COPIED=0"
+    
+    :: Process all files
+    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
+        set "FULL_PATH=%%F"
+        set "FILE_NAME=%%~nxF"
+        set "IS_PATCHER=0"
+        
+        :: Check if file is in a patcher directory (case-insensitive)
+        echo "!FULL_PATH!" | findstr /i "\\BepInEx\\patchers\\" >nul
+        if !errorlevel! equ 0 (
+            set "IS_PATCHER=1"
+            :: Create patchers directory if needed
+            if not exist "!PATCHERS_DIR!" (
+                call :CREATE_DIRECTORY "!PATCHERS_DIR!" "Failed to create patchers directory" || (
+                    endlocal
+                    exit /b 8
+                )
+            )
+            :: Set destination for patcher file
+            set "DEST_PATH=!PATCHERS_DIR!\!FILE_NAME!"
+            call :Log "Found patcher file: !FILE_NAME!"
+        ) else (
+            :: Handle non-patcher files - flatten to plugin directory
+            if "!FILE_NAME!" neq "" (
+                set "DEST_PATH=!INSTALL_DIR!\!FILE_NAME!"
+            )
+        )
+
+        :: Copy file if it's not a directory
+        for %%A in ("!FILE_NAME!") do if "%%~xA" neq "" (
+            call :CopyFile "!FULL_PATH!" "!DEST_PATH!" "!MOD_NAME!"
+            if !errorlevel! equ 0 (
+                set /a "FILES_COPIED+=1"
+            ) else (
+                call :HandleError 8 "" "Failed to copy file: !FILE_NAME!"
+                endlocal
+                exit /b 8
+            )
+        )
+    )
+
+    :: Verify files were copied
+    if !FILES_COPIED! equ 0 (
+        call :HandleError 8 "" "No files copied for !MOD_NAME!"
+        endlocal
+        exit /b 8
+    )
+
+    :: Record version info
+    call :WriteVersionInfo "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!"
+    if !errorlevel! neq 0 (
+        call :Log "WARNING: Failed to write version info for !MOD_NAME!" "console"
+    )
+
+    :: Clean up extract directory
+    rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
+
+    call :Log "Successfully installed !MOD_NAME! (!FILES_COPIED! files)"
+    endlocal
+    exit /b 0
+
+:: =====================================================================
 :: FUNCTION: INSTALLSINGLEMOD
 :: PURPOSE: Handles installation of individual mod
 :: PARAMS: %1=Author, %2=ModName, %3=Index
 :: RETURNS: 0=Success, Various installation error codes
-::===================================================================
+:: =====================================================================
 :InstallSingleMod
     setlocal EnableDelayedExpansion
     set "MOD_AUTHOR=%~1"
@@ -337,97 +425,20 @@ exit /b 0
         exit /b !errorlevel!
     )
     
-    :: Setup paths
-    set "INSTALL_DIR=!FOUND_PATH!\BepInEx\plugins\!MOD_INDEX_PADDED!_!MOD_NAME!"
-    set "MOD_EXTRACT_DIR=!EXTRACT_DIR!\!MOD_NAME!"
-    
-    :: Download and extract the mod using helper
+    :: Download and extract the mod
     call :DownloadAndExtractMod "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!" "!DOWNLOAD_URL!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
     )
     
-    :: Verify extraction directory exists
-    if not exist "!MOD_EXTRACT_DIR!" (
-        call :HandleError 3 "" "MOD_EXTRACT_DIR"
+    :: Install mod files using dedicated function
+    call :InstallModFiles "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!" "!MOD_INDEX_PADDED!"
+    if !errorlevel! neq 0 (
         endlocal
-        exit /b 3
+        exit /b !errorlevel!
     )
-    
-    :: Create required directories
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins" || (
-        call :HandleError 8 "" "PLUGINS_DIR"
-        endlocal
-        exit /b 8
-    )
-    
-    call :CREATE_DIRECTORY "!INSTALL_DIR!" || (
-        call :HandleError 8 "" "INSTALL_DIR"
-        endlocal
-        exit /b 8
-    )
-    
-    :: Initialize counters and flags
-    set "FILES_COPIED=0"
-    set "HAS_PATCHERS=0"
-    
-    :: First pass - identify if we have patcher files
-    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
-        echo "%%F" | findstr /i "\\patchers\\" >nul
-        if !errorlevel! equ 0 (
-            set "HAS_PATCHERS=1"
-        )
-    )
-    
-    :: Create patchers directory if needed
-    if !HAS_PATCHERS! equ 1 (
-        call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers" || (
-            call :HandleError 8 "" "PATCHERS_DIR"
-            endlocal
-            exit /b 8
-        )
-    )
-    
-    :: Process all files
-    for /f "delims=" %%F in ('dir /b /s /a-d "!MOD_EXTRACT_DIR!"') do (
-        :: Get relative path and filename
-        set "FULL_PATH=%%F"
-        set "FILE_NAME=%%~nxF"
-        
-        :: Default destination is mod's plugin directory
-        set "DEST_PATH=!INSTALL_DIR!\!FILE_NAME!"
-        
-        :: Check for patcher files (case-insensitive)
-        echo "!FULL_PATH!" | findstr /i "\\patchers\\" >nul
-        if !errorlevel! equ 0 (
-            set "DEST_PATH=!FOUND_PATH!\BepInEx\patchers\!FILE_NAME!"
-            call :Log "Found patcher file: !FILE_NAME!"
-        )
-        
-        :: Copy file
-        call :CopyFile "!FULL_PATH!" "!DEST_PATH!" "!MOD_NAME!"
-        if !errorlevel! equ 0 (
-            set /a "FILES_COPIED+=1"
-        ) else (
-            endlocal
-            exit /b 8
-        )
-    )
-    
-    :: Verify at least one file was copied
-    if !FILES_COPIED! equ 0 (
-        call :HandleError 8 "" "No files copied for !MOD_NAME!"
-        endlocal
-        exit /b 8
-    )
-    
-    :: Record version (continues even if this fails)
-    call :WriteVersionInfo "!MOD_AUTHOR!" "!MOD_NAME!" "!MOD_VERSION!"
-    
-    :: Clean up
-    rd /s /q "!MOD_EXTRACT_DIR!" 2>nul
-    
+
     call :ColorEcho GREEN "✓ Successfully installed !MOD_NAME! v!MOD_VERSION! ^(!FILES_COPIED! files^)"
     endlocal
     exit /b 0
@@ -546,7 +557,7 @@ exit /b 0
         call :ColorEcho YELLOW "Would you like to:"
         call :ColorEcho WHITE "  1. Remove mods and keep all backups"
         call :ColorEcho WHITE "  2. Remove mods and delete all backups"
-        call :ColorEcho WHITE "  3. Cancel uninstallation"
+        call :Echo WHITE "  3. Cancel uninstallation"
         
         :BACKUP_CHOICE_LOOP
         set /p "BACKUP_CHOICE=Choose an option (1-3): "
@@ -1140,17 +1151,20 @@ exit /b 0
     exit /b 0
 
 ::===================================================================
-:: FUNCTION: DownloadFile
+:: FUNCTION: DOWNLOADFILE
 :: PURPOSE: Downloads file from URL with error handling and timeout
 :: PARAMS: %1=URL, %2=Output path
 :: MODIFIES: None
 :: RETURNS: 0=Success, 2=Download failure
-::===================================================================
+:: =====================================================================
 :DownloadFile
     setlocal EnableDelayedExpansion
     set "URL=%~1"
     set "OUTPUT=%~2"
 
+    set "RETRY_COUNT=3"
+    
+    :retry_download
     powershell -Command "$ErrorActionPreference = 'Stop';" ^
         "try { " ^
             "$ProgressPreference = 'SilentlyContinue';" ^
@@ -1170,11 +1184,16 @@ exit /b 0
             "exit 1 " ^
         "}"
     
-    if !errorlevel! neq 0 (
-        endlocal
-        exit /b 2
+    if !errorlevel! equ 0 (
+        goto :verify_file
+    ) else if !RETRY_COUNT! gtr 0 (
+        set /a RETRY_COUNT-=1
+        call :Log "Download failed, retrying (!RETRY_COUNT! attempts left)..." "console"
+        timeout /t 5 /nobreak >nul
+        goto :retry_download
     )
     
+    :verify_file
     :: Verify file exists and is not empty
     if not exist "!OUTPUT!" (
         endlocal
@@ -1238,7 +1257,10 @@ exit /b 0
     :: Create a temporary response file
     set "TEMP_RESPONSE=!TEMP_DIR!\!MOD_NAME!_response.json"
 
-    :: Make API request with enhanced error handling
+    set "RETRY_COUNT=3"
+    set "API_SUCCESS=0"
+    
+    :retry_api_call
     powershell -Command ^
         "$ErrorActionPreference = 'Stop';" ^
         "$ProgressPreference = 'SilentlyContinue';" ^
@@ -1255,14 +1277,25 @@ exit /b 0
             "exit $(if ($_.Exception.Message -match 'Invalid API') { 10 } else { 2 })" ^
         "}"
 
-    if !errorlevel! equ 2 (
-        call :HandleError 2 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
-        endlocal
-        exit /b 2
-    ) else if !errorlevel! equ 10 (
-        call :HandleError 10 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
-        endlocal
-        exit /b 10
+    if !errorlevel! equ 0 (
+        set "API_SUCCESS=1"
+    ) else if !RETRY_COUNT! gtr 0 (
+        set /a RETRY_COUNT-=1
+        call :Log "API call failed, retrying (!RETRY_COUNT! attempts left)..." "console"
+        timeout /t 5 /nobreak >nul
+        goto :retry_api_call
+    )
+
+    if not !API_SUCCESS!==1 (
+        if !errorlevel! equ 2 (
+            call :HandleError 2 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
+            endlocal
+            exit /b 2
+        ) else if !errorlevel! equ 10 (
+            call :HandleError 10 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
+            endlocal
+            exit /b 10
+        )
     )
 
     :: Validate output file exists and has content
