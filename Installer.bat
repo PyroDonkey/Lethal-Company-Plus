@@ -1,8 +1,13 @@
 @echo off
+chcp 65001 >nul
 setlocal EnableDelayedExpansion
+
+:: Add early console encoding configuration
+powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" >nul
 
 :: Initialization Entry Point
 call :InitializeConfig
+goto :START_INSTALLATION
 
 :: Temporary workspace configuration
 set "TEMP_DIR=%TEMP%\LCPlusInstall"
@@ -21,12 +26,90 @@ set "CYAN="
 set "WHITE="
 set "RESET="
 
-:: Version Information 
-set "VERSION=1.9.0"
-set "LAST_MODIFIED=2025-02-22"
-
 :: Temporary working variables
 set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
+
+:: =====================================================================
+:: FUNCTION: INITIALIZECONFIG
+:: PURPOSE: Initializes all configuration variables and error messages
+:: PARAMS: None
+:: MODIFIES: GAME_NAME, STEAM_APPID, MODLIST_URL, TEMP_DIR, VERSION
+:: RETURNS: 0 (Always succeeds)
+:: =====================================================================
+:InitializeConfig
+    :: Game Information
+    set "GAME_NAME=Lethal Company"
+    set "STEAM_APPID=1966720"
+    
+    :: Core Components
+    set "BEPINEX_AUTHOR=BepInEx"
+    set "BEPINEX_NAME=BepInExPack"
+    
+    :: URL Configuration
+    set "MODLIST_URL=https://raw.githubusercontent.com/PyroDonkey/Lethal-Company-Plus/main/Modlist/modlist.ini"
+
+    :: Path Configuration
+    set "TEMP_DIR=%TEMP%\LCPlusInstall"
+    set "LOG_DIR=%TEMP_DIR%\logs"
+    set "LOG_FILE=%LOG_DIR%\debug.log" 
+    set "EXTRACT_DIR=%TEMP_DIR%\extracted"
+    set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
+
+    :: Version Information
+    set "VERSION=1.10.0"
+    set "LAST_MODIFIED=2025-02-23"
+
+    :: Error Message Definitions
+    set "ERROR_MSG_1=General/unexpected error"
+    set "ERROR_MSG_2=Network communication failure"
+    set "ERROR_MSG_3=File/directory not found"
+    set "ERROR_MSG_4=Insufficient disk space"
+    set "ERROR_MSG_5=Backup/restore operation failure"
+    set "ERROR_MSG_6=BepInEx configuration error"
+    set "ERROR_MSG_7=Registry access failure"
+    set "ERROR_MSG_8=File operation failure (copy/delete)"
+    set "ERROR_MSG_9=Archive extraction failure"
+    set "ERROR_MSG_10=Invalid API response"
+    set "ERROR_MSG_11=User input validation failed"
+    set "ERROR_MSG_12=Permission denied"
+    set "ERROR_MSG_13=Invalid game installation path"
+    set "ERROR_MSG_14=Mod installation failure"
+    set "ERROR_MSG_15=Uninstall operation failed"
+
+    :: Load error code mappings
+    call :DefineErrorCodes
+
+    :: Installation State Tracking
+    set "INSTALL_STATUS=0"
+    set "FOUND_PATH="
+    set "VERSION_FILE="
+    set "BACKUP_DIR="
+exit /b 0
+
+:: =====================================================================
+:: FUNCTION: DEFINEERRORCODES
+:: PURPOSE: Maps error messages to error codes
+:: PARAMS: None
+:: MODIFIES: ERROR_CODE_1 to ERROR_CODE_15
+:: RETURNS: 0 (Always succeeds)
+:: =====================================================================
+:DefineErrorCodes
+    set "ERROR_CODE_1=%ERROR_MSG_1%"
+    set "ERROR_CODE_2=%ERROR_MSG_2%"
+    set "ERROR_CODE_3=%ERROR_MSG_3%"
+    set "ERROR_CODE_4=%ERROR_MSG_4%"
+    set "ERROR_CODE_5=%ERROR_MSG_5%"
+    set "ERROR_CODE_6=%ERROR_MSG_6%"
+    set "ERROR_CODE_7=%ERROR_MSG_7%"
+    set "ERROR_CODE_8=%ERROR_MSG_8%"
+    set "ERROR_CODE_9=%ERROR_MSG_9%"
+    set "ERROR_CODE_10=%ERROR_MSG_10%"
+    set "ERROR_CODE_11=%ERROR_MSG_11%"
+    set "ERROR_CODE_12=%ERROR_MSG_12%"
+    set "ERROR_CODE_13=%ERROR_MSG_13%"
+    set "ERROR_CODE_14=%ERROR_MSG_14%"
+    set "ERROR_CODE_15=%ERROR_MSG_15%"
+exit /b 0
 
 :: =====================================================================
 :: FUNCTION: CHECK_AND_REQUEST_ELEVATION
@@ -38,7 +121,7 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 :CHECK_AND_REQUEST_ELEVATION
     WHOAMI /GROUPS | findstr /b /c:"Mandatory Label\High Mandatory Level" >nul 2>&1
     if %errorlevel% equ 0 (
-        goto :CONTINUE_INITIALIZATION
+        goto :START_INSTALLATION
     )
 
     echo Requesting administrator privileges...
@@ -47,115 +130,10 @@ set "CONFIRMATION_FILE=%TEMP_DIR%\install_confirmed.flag"
 
     if %errorlevel% neq 0 (
         call :HandleError 12
-        set INSTALL_STATUS=12
-        goto :CLEANUP
-    )
-    exit /b 0
-
-:: =====================================================================
-:: FUNCTION: INITIALIZECONFIG 
-:: PURPOSE: Centralized configuration management
-:: PARAMS: None
-:: MODIFIES: All global configuration variables
-:: RETURNS: 0=Success
-:: =====================================================================
-:InitializeConfig
-    :: Core installation state tracking
-    set "INSTALL_STATUS=0"
-    set "FOUND_PATH="
-    set "VERSION_FILE="
-    set "BACKUP_DIR="
-
-    :: Load error code definitions
-    call :DefineErrorCodes
-exit /b 0
-
-:: =====================================================================
-:: FUNCTION: DEFINEERRORCODES
-:: PURPOSE: Centralized error code definitions
-:: PARAMS: None
-:: MODIFIES: ERROR_CODE_* variables
-:: RETURNS: 0=Success
-:: =====================================================================
-:DefineErrorCodes
-    set "ERROR_CODE_1=General/unexpected error"
-    set "ERROR_CODE_2=Network communication failure"
-    set "ERROR_CODE_3=File/directory not found"
-    set "ERROR_CODE_4=Insufficient disk space"
-    set "ERROR_CODE_5=Backup/restore operation failure"
-    set "ERROR_CODE_6=BepInEx configuration error"
-    set "ERROR_CODE_7=Registry access failure"
-    set "ERROR_CODE_8=File operation failure (copy/delete)"
-    set "ERROR_CODE_9=Archive extraction failure"
-    set "ERROR_CODE_10=Invalid API response"
-    set "ERROR_CODE_11=User input validation failed"
-    set "ERROR_CODE_12=Permission denied"
-    set "ERROR_CODE_13=Invalid game installation path"
-    set "ERROR_CODE_14=Mod installation failure"
-    set "ERROR_CODE_15=Uninstall operation failed"
-exit /b 0
-
-:: =====================================================================
-:: FUNCTION: CONTINUE_INITIALIZATION
-:: PURPOSE: Sets up working directories and environment
-:: PARAMS: None
-:: MODIFIES: INSTALL_STATUS
-:: RETURNS: 0=Success, 3=DirectoryError
-:: =====================================================================
-:CONTINUE_INITIALIZATION
-    call :CREATE_DIRECTORY "%TEMP_DIR%" "Failed to create temp directory: %TEMP_DIR%" || (
-        goto :CLEANUP
-    )
-    
-    call :CREATE_DIRECTORY "%LOG_DIR%" "Failed to create log directory: %LOG_DIR%" || (
-        goto :CLEANUP
-    )
-    
-    call :CREATE_DIRECTORY "%EXTRACT_DIR%" "Failed to create extraction directory: %EXTRACT_DIR%" || (
         goto :CLEANUP
     )
 
-    :: Initialize log file AFTER directory creation
-    call :InitializeLogging
-
-    :: Enable ANSI support and set up colors
-    reg add "HKCU\Software\Microsoft\Command Processor" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
-    if !errorlevel! neq 0 (
-        reg add "HKLM\Software\Microsoft\Command Processor" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
-    )
-
-    powershell -Command "$host.UI.RawUI.ForegroundColor = 'Green'" >nul 2>&1
-    if !errorlevel! equ 0 (
-        for /F %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
-        set "GREEN=!ESC![92m"
-        set "YELLOW=!ESC![93m"
-        set "RED=!ESC![91m"
-        set "BLUE=!ESC![94m"
-        set "CYAN=!ESC![96m"
-        set "WHITE=!ESC![97m"
-        set "RESET=!ESC![0m"
-    ) else (
-        call :Log "WARNING: ANSI colors not supported" "console"
-        set "ESC="
-        set "GREEN="
-        set "YELLOW="
-        set "RED="
-        set "BLUE="
-        set "CYAN="
-        set "WHITE="
-        set "RESET="
-    )
-
-    :: Configure UTF-8 encoding
-    powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" >nul
-
-    :: Configure PowerShell execution policy
-    powershell Set-ExecutionPolicy Bypass -Scope Process >nul 2>&1
-    if !errorlevel! neq 0 (
-        powershell Set-ExecutionPolicy RemoteSigned -Scope Process >nul 2>&1
-    )
-
-::===================================================================
+:: =====================================================================
 :: FUNCTION: START_INSTALLATION
 :: PURPOSE: Main installation sequence controller
 :: PARAMS: None
@@ -163,22 +141,41 @@ exit /b 0
 :: RETURNS: Proceeds to CLEANUP with appropriate INSTALL_STATUS
 ::===================================================================
 :START_INSTALLATION
+    :: Create working directories first
+    call :CREATE_DIRECTORY "%TEMP_DIR%" || exit /b 3
+    call :CREATE_DIRECTORY "%LOG_DIR%" || exit /b 3
+    call :CREATE_DIRECTORY "%EXTRACT_DIR%" || exit /b 3
+    
+    :: Ensure UTF-8 output capabilities
+    powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" >nul
+    powershell -Command "$OutputEncoding = [System.Text.Encoding]::UTF8" >nul
+    
+    :: Update ANSI initialization to use proper escape sequence
+    for /F %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
+    set "GREEN=!ESC![92m"
+    set "YELLOW=!ESC![93m"
+    set "RED=!ESC![91m"
+    set "BLUE=!ESC![94m"
+    set "CYAN=!ESC![96m"
+    set "WHITE=!ESC![97m"
+    set "RESET=!ESC![0m"
+
+    :: Initialize logging after directories are created
+    call :InitializeLogging
+
     :: Core installation sequence
     call :InitializeEnvironment || (
         call :HandleError 1
-        set INSTALL_STATUS=1
         goto :CLEANUP
     )
 
     call :LocateGame || (
         call :HandleError 13
-        set INSTALL_STATUS=13
         goto :CLEANUP
     )
 
     call :DownloadModlist || (
         call :HandleError 10
-        set INSTALL_STATUS=10
         goto :CLEANUP
     )
 
@@ -191,13 +188,11 @@ exit /b 0
 
     call :INSTALL_BEPINEX_PACK || (
         call :HandleError 6
-        set INSTALL_STATUS=6
         goto :CLEANUP
     )
 
     call :INSTALL_ALL_MODS || (
         call :HandleError 14
-        set INSTALL_STATUS=14
         goto :CLEANUP
     )
 
@@ -205,7 +200,7 @@ exit /b 0
 
 ::===================================================================
 :: FUNCTION: INSTALL_ALL_MODS
-:: Processes and installs all configured mods
+:: PURPOSE: Processes and installs all configured mods
 :: USES: MOD_LIST, MOD_COUNT
 :: RETURNS: 0=Success, Various error codes from InstallSingleMod
 ::===================================================================
@@ -272,7 +267,6 @@ exit /b 0
 :: FUNCTION: DOWNLOADANDEXTRACTMOD
 :: PURPOSE: Downloads and extracts a specific mod package
 :: PARAMS: %1=Author, %2=ModName, %3=Version, %4=DownloadURL
-:: USES: TEMP_DIR, EXTRACT_DIR, LOG_DIR
 :: RETURNS: 0=Success, 2=DownloadError, 3=DirectoryError, 9=ExtractError
 ::===================================================================
 :DownloadAndExtractMod
@@ -299,14 +293,15 @@ exit /b 0
     if exist "!MOD_EXTRACT_DIR!" rd /s /q "!MOD_EXTRACT_DIR!"
 
     :: Create fresh extract directory
-    call :CREATE_DIRECTORY "!MOD_EXTRACT_DIR!" "Failed to create mod extract directory: !MOD_EXTRACT_DIR!" || (
+    call :CREATE_DIRECTORY "!MOD_EXTRACT_DIR!" || (
         endlocal
-        exit /b 3
+        call :HandleError 3 "" "MOD_EXTRACT_DIR"
     )
 
     :: Extract mod
     call :ExtractFiles "!ZIP_FILE!" "!MOD_EXTRACT_DIR!" "!MOD_NAME!"
     if !errorlevel! neq 0 (
+        call :HandleError 9 "!LOG_DIR!\BepInExPack_extract.log" "ZIP_FILE EXTRACT_ROOT"
         endlocal
         exit /b 9
     )
@@ -421,7 +416,7 @@ exit /b 0
 
 ::===================================================================
 :: FUNCTION: SHOW_MOD_LIST_AND_CONFIRM
-:: Displays mods and gets user confirmation
+:: PURPOSE: Displays mods and gets user confirmation
 :: MODIFIES: CONFIRMATION_FILE
 :: RETURNS: 0=Confirmed, 1=Cancelled, 11=InvalidInput
 ::===================================================================
@@ -457,21 +452,21 @@ exit /b 0
         endlocal
         exit /b 1
     ) else (
+        endlocal
         call :HandleError 11
         goto :CONFIRM_LOOP
     )
 
-::===================================================================
+:: =====================================================================
 :: FUNCTION: UNINSTALL_MODS
-:: Handles the uninstallation of BepInEx, mods, and related files
-:: USES: FOUND_PATH, TEMP_DIR, INSTALL_STATUS
-:: CALLS: LocateGame, ColorEcho, HandleError
+:: PURPOSE: Handles the uninstallation of BepInEx, mods, and related files
+:: PARAMS: None
 :: MODIFIES: INSTALL_STATUS
-:: RETURNS: 0=Success, Non-zero=Various error codes
-::===================================================================
+:: RETURNS: 0=Success, 15=UninstallOperationFailed
+:: =====================================================================
 :UNINSTALL_MODS
     setlocal EnableDelayedExpansion
-    call :Log "Starting uninstallation process..." "console"
+    call :Log "Starting uninstallation process..."
     
     :: Check if BepInEx exists
     if not exist "!FOUND_PATH!\BepInEx" (
@@ -566,9 +561,8 @@ exit /b 0
     call :ColorEcho WHITE "* Removing BepInEx folder..."
     rd /s /q "!FOUND_PATH!\BepInEx" 2>nul
     if !errorlevel! neq 0 (
-        call :HandleError "Failed to remove BepInEx folder" 8
         endlocal
-        exit /b 15
+        call :HandleError 8 "" "FOUND_PATH\BepInEx"
     )
 
     :: Remove Cache folder
@@ -576,31 +570,39 @@ exit /b 0
     if exist "!FOUND_PATH!\Cache" (
         rd /s /q "!FOUND_PATH!\Cache" 2>nul
         if !errorlevel! neq 0 (
-            call :HandleError "Failed to remove Cache folder" 8
             endlocal
-            exit /b 15
+            call :HandleError 8 "" "FOUND_PATH\Cache"
         )
     )
 
     :: Remove doorstop files
     call :ColorEcho WHITE "* Removing doorstop files..."
-    if exist "!FOUND_PATH!\doorstop_config.ini" del /f /q "!FOUND_PATH!\doorstop_config.ini"
-    if exist "!FOUND_PATH!\winhttp.dll" del /f /q "!FOUND_PATH!\winhttp.dll"
+    if exist "!FOUND_PATH!\doorstop_config.ini" (
+        del /f /q "!FOUND_PATH!\doorstop_config.ini" || (
+            endlocal
+            call :HandleError 8 "" "FOUND_PATH\doorstop_config.ini"
+        )
+    )
+    if exist "!FOUND_PATH!\winhttp.dll" (
+        del /f /q "!FOUND_PATH!\winhttp.dll" || (
+            endlocal
+            call :HandleError 8 "" "FOUND_PATH\winhttp.dll"
+        )
+    )
 
     :: Verification Section
     call :Log "Verifying complete removal of all components..."
     
     :: Check for any remaining mod-related files
-    set "FAILED_REMOVAL="
-    if exist "!FOUND_PATH!\BepInEx" set "FAILED_REMOVAL=1"
-    if exist "!FOUND_PATH!\Cache" set "FAILED_REMOVAL=1"
-    if exist "!FOUND_PATH!\doorstop_config.ini" set "FAILED_REMOVAL=1"
-    if exist "!FOUND_PATH!\winhttp.dll" set "FAILED_REMOVAL=1"
+    set "REMAINING_PATHS="
+    if exist "!FOUND_PATH!\BepInEx" set "REMAINING_PATHS=!REMAINING_PATHS! BepInEx"
+    if exist "!FOUND_PATH!\Cache" set "REMAINING_PATHS=!REMAINING_PATHS! Cache"
+    if exist "!FOUND_PATH!\doorstop_config.ini" set "REMAINING_PATHS=!REMAINING_PATHS! doorstop_config.ini"
+    if exist "!FOUND_PATH!\winhttp.dll" set "REMAINING_PATHS=!REMAINING_PATHS! winhttp.dll"
 
-    if defined FAILED_REMOVAL (
-        call :HandleError "Some mod files could not be removed" 8
+    if defined REMAINING_PATHS (
         endlocal
-        exit /b 15
+        call :HandleError 8 "" "FOUND_PATH REMAINING_PATHS"
     )
 
     :: Completion Section
@@ -613,19 +615,17 @@ exit /b 0
 
 ::===================================================================
 :: FUNCTION: CREATE_DIRECTORY
-:: Creates directory with error handling
-:: PARAMS: %1=DirectoryPath, %2=Error message
-:: RETURNS: 0=Success, 3=CreateError
+:: PURPOSE: Creates directory with standardized error handling
+:: PARAMS: %1=DirectoryPath
+:: RETURNS: 0=Success, exits with error code 3 on failure
 ::===================================================================
 :CREATE_DIRECTORY
-    setlocal
+    setlocal EnableDelayedExpansion
     set "DIR_PATH=%~1"
-    set "ERR_MSG=%~2"
-    if not exist "%DIR_PATH%" (
-        mkdir "%DIR_PATH%" 2>nul || (
+    if not exist "!DIR_PATH!" (
+        mkdir "!DIR_PATH!" 2>nul || (
             call :HandleError 3 "" "DIR_PATH"
             endlocal
-            exit /b 3
         )
     )
     endlocal
@@ -674,48 +674,56 @@ exit /b 0
 :: RETURNS: Provided error code
 :: =====================================================================
 :HandleError
-    setlocal EnableDelayedExpansion
+    setlocal DisableDelayedExpansion
     set "ERROR_CATEGORY_CODE=%~1"
     set "ERROR_LOG=%~2"
-    set "VAR_LIST=%~3"  
+    set "VAR_LIST=%~3"
 
-    :: Get error description from code (using the variables defined in InitializeConfig)
-    for /f "delims=" %%a in ('set ERROR_CODE_%ERROR_CATEGORY_CODE%') do set "ERROR_DESCRIPTION=%%a"
-    set "ERROR_DESCRIPTION=!ERROR_DESCRIPTION:*:=!"  &:: Remove "ERROR_CODE_X=" prefix
+    :: Robust error message lookup with delayed expansion protection
+    set "ERROR_DESCRIPTION=Unknown error (code !ERROR_CATEGORY_CODE!)"
+    for /f "tokens=1,* delims==" %%A in ('set ERROR_CODE_!ERROR_CATEGORY_CODE! 2^>nul') do (
+        set "ERROR_DESCRIPTION=%%B"
+    )
 
-    :: Enhanced error formatting
-    call :Log "ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION!" "console"
-    call :ColorEcho RED "X ERROR [!ERROR_CATEGORY_CODE!]: !ERROR_DESCRIPTION!"
+    :: Now enable delayed expansion for message processing
+    setlocal EnableDelayedExpansion
+    :: Log error with proper escaping and improved formatting
+    call :Log "ERROR [!ERROR_CATEGORY_CODE!]:  !ERROR_DESCRIPTION!" "console"
+    call :ColorEcho RED "X ERROR [!ERROR_CATEGORY_CODE!]:  !ERROR_DESCRIPTION!"
 
-    :: Log context variables if provided
+    :: Context variable handling
     if defined VAR_LIST (
         call :Log "Error context variables:" "console"
         for %%V in (!VAR_LIST!) do (
             if defined %%V (
                 call :Log "  %%V=!%%V!" "console"
             ) else (
-               call :Log "  %%V=<undefined>" "console"
+                call :Log "  %%V=<undefined>" "console"
             )
         )
     )
 
-    :: Include log file contents if provided
+    :: Additional error logs with timestamped entries
     if defined ERROR_LOG (
         if exist "!ERROR_LOG!" (
             call :Log "Additional error details from !ERROR_LOG!:" "console"
-            type "!ERROR_LOG!" >> "!LOG_FILE!"
+            call :Log "----------------------------------------" "console"
+            for /f "tokens=*" %%x in ('type "!ERROR_LOG!"') do (
+                call :Log "%%x" "console"
+            )
             call :Log "----------------------------------------" "console"
         )
     )
 
-    :: Add troubleshooting context
+    :: Standard troubleshooting steps
     call :Log "Troubleshooting steps:" "console"
     call :Log "1. Verify internet connection" "console"
     call :Log "2. Check antivirus/firewall settings" "console"
     call :Log "3. Ensure sufficient disk space" "console"
     call :Log "4. Retry with administrator privileges" "console"
 
-    endlocal & (
+    :: Single endlocal for cleaner scope exit
+    endlocal & endlocal & (
         set "INSTALL_STATUS=%ERROR_CATEGORY_CODE%"
         exit /b %ERROR_CATEGORY_CODE%
     )
@@ -800,9 +808,74 @@ exit /b 0
     setlocal EnableDelayedExpansion
     set "FOUND_PATH="
     
-    call :Log "Starting game location detection..." "console"
-    call :ColorEcho BLUE "► Searching for Lethal Company installation..."
+    call :Log "Starting game location detection..."
+    call :ColorEcho BLUE "► Searching for !GAME_NAME! installation..."
     echo.
+
+    :: Steam AppID-based check
+    call :Log "Checking Steam AppID (!STEAM_APPID!) locations..."
+    reg query "HKCU\Software\Valve\Steam" /v SteamPath >nul 2>&1
+    if !errorlevel! equ 0 (
+        for /f "tokens=2,*" %%A in ('reg query "HKCU\Software\Valve\Steam" /v SteamPath 2^>nul') do (
+            set "STEAM_PATH=%%C"
+            if not defined STEAM_PATH (
+                call :Log "WARNING: SteamPath registry value empty"
+                goto :SteamCheckEnd
+            )
+            call :Log "Found Steam installation at: !STEAM_PATH!"
+            
+            :: Check libraryfolders.vdf
+            set "LIBRARY_FILE=!STEAM_PATH!\steamapps\libraryfolders.vdf"
+            if exist "!LIBRARY_FILE!" (
+                call :Log "Parsing libraryfolders.vdf..."
+                for /f "tokens=2 delims=^= " %%C in ('type "!LIBRARY_FILE!" ^| findstr /i /c:"\"path\""') do (
+                    set "LIB_PATH=%%C"
+                    set "LIB_PATH=!LIB_PATH:\"=!"
+                    set "LIB_PATH=!LIB_PATH:"=!"
+                    if not defined LIB_PATH (
+                        call :Log "ERROR: Failed to parse library path"
+                        call :HandleError 7 "" "LIBRARY_FILE"
+                    )
+                    call :Log "Checking library folder: !LIB_PATH!"
+                    
+                    :: App manifest handling
+                    set "APP_MANIFEST=!LIB_PATH!\steamapps\appmanifest_!STEAM_APPID!.acf"
+                    set "INSTALL_DIR="
+                    
+                    if exist "!APP_MANIFEST!" (
+                        call :Log "Found appmanifest_!STEAM_APPID!.acf"
+                        for /f "tokens=2 delims=^= " %%D in ('type "!APP_MANIFEST!" ^| findstr /c:"\"installdir\""') do (
+                            set "INSTALL_DIR=%%D"
+                            set "INSTALL_DIR=!INSTALL_DIR:\"=!"
+                            set "INSTALL_DIR=!INSTALL_DIR:"=!"
+                        )
+                        if not defined INSTALL_DIR (
+                            call :Log "ERROR: Failed to parse installdir from appmanifest"
+                            call :HandleError 7 "" "APP_MANIFEST"
+                        )
+                        set "CHECK_PATH=!LIB_PATH!\steamapps\common\!INSTALL_DIR!"
+                    ) else (
+                        call :Log "No appmanifest found, using default path"
+                        set "CHECK_PATH=!LIB_PATH!\steamapps\common\!GAME_NAME!"
+                    )
+                    
+                    :: Final path validation
+                    if exist "!CHECK_PATH!\Lethal Company.exe" (
+                        set "FOUND_PATH=!CHECK_PATH!"
+                        call :Log "Found game via AppID at: !FOUND_PATH!"
+                        goto :ValidateAndSet
+                    ) else (
+                        call :Log "WARNING: Game not found at !CHECK_PATH!"
+                    )
+                )
+            ) else (
+                call :Log "WARNING: libraryfolders.vdf not found at !LIBRARY_FILE!"
+            )
+        )
+    ) else (
+        call :Log "Steam registry key not found in HKCU"
+    )
+    :SteamCheckEnd
 
     call :Log "DEBUG: Starting registry checks..."
     
@@ -821,7 +894,7 @@ exit /b 0
             call :Log "DEBUG: Found registry key, attempting to get value..."
             for /f "tokens=2,*" %%B in ('reg query %%~A /v "InstallPath" 2^>nul') do (
                 call :Log "DEBUG: Registry value found: %%C"
-                set "CHECK_PATH=%%C\steamapps\common\Lethal Company"
+                set "CHECK_PATH=%%C\steamapps\common\!GAME_NAME!"
                 call :Log "DEBUG: Checking path: !CHECK_PATH!"
                 
                 if exist "!CHECK_PATH!\Lethal Company.exe" (
@@ -875,9 +948,9 @@ exit /b 0
 
     :: Manual input if automatic detection fails
     :ManualInput
-    call :ColorEcho YELLOW "Unable to automatically locate Lethal Company."
+    call :ColorEcho YELLOW "Unable to automatically locate !GAME_NAME!."
     echo.
-    call :ColorEcho WHITE "Please enter the full path to your Lethal Company installation"
+    call :ColorEcho WHITE "Please enter the full path to your !GAME_NAME! installation"
     call :ColorEcho WHITE "(The folder containing 'Lethal Company.exe'):"
     echo.
     :RetryPathInput
@@ -909,8 +982,8 @@ exit /b 0
     :: Validate path format
     echo !FOUND_PATH! | findstr /r /c:"^[A-Za-z]:\\[^/:\*\\?<>|\"]*$" >nul
     if !errorlevel! neq 0 (
-        call :ColorEcho RED "Invalid path format. Path must be in format: C:\Folder\Subfolder"
-        call :Log "Invalid path format: '!FOUND_PATH!'"
+        endlocal
+        call :HandleError 13 "" "FOUND_PATH"
         goto :RetryPathInput
     )
 
@@ -953,7 +1026,7 @@ exit /b 0
     )
 
     call :Log "DEBUG: Validation complete"
-    call :ColorEcho GREEN "✓ Lethal Company found at: '!FOUND_PATH!'"
+    call :ColorEcho GREEN "✓ !GAME_NAME! found at: '!FOUND_PATH!'"
     call :Log "Successfully located game at: '!FOUND_PATH!'"
     
     endlocal & set "FOUND_PATH=%FOUND_PATH%"
@@ -977,14 +1050,12 @@ exit /b 0
     if exist "!FOUND_PATH!\BepInEx" (
         mkdir "!BACKUP_DIR!" 2>nul || (
             call :HandleError 5 "" "BACKUP_DIR"
-            goto :CreateBackup_End
         )
 
         :: Create backup with logging
         robocopy "!FOUND_PATH!\BepInEx" "!BACKUP_DIR!\BepInEx" /E /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\backup.log" >nul
         if !errorlevel! GEQ 8 (
             call :HandleError 5 "!LOG_DIR!\backup.log"
-            goto :CreateBackup_End
         )
 
         :: Also backup doorstop files if they exist
@@ -1005,7 +1076,6 @@ exit /b 0
     :CreateBackup_End
     endlocal & (
         set "BACKUP_DIR=%BACKUP_DIR%"
-        exit /b 0
     )
 
 :: =====================================================================
@@ -1021,8 +1091,8 @@ exit /b 0
 
     :: Verify backup exists
     if not exist "!BACKUP_DIR!\BepInEx" (
+        endlocal
         call :HandleError 3 "" "BACKUP_DIR"
-        goto :RestoreBackup_End
     )
 
     :: Remove current installation if it exists
@@ -1030,17 +1100,17 @@ exit /b 0
         rd /s /q "!FOUND_PATH!\BepInEx"
         if !errorlevel! neq 0 (
             call :HandleError 8
-            goto :RestoreBackup_End
         )
     )
 
     :: Restore BepInEx directory with robocopy
-    robocopy "!BACKUP_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" /E /COPYALL /R:0 /W:0 /NP /LOG+:"!LOG_DIR!\restore.log" >nul
+    robocopy "!BACKUP_DIR!\BepInEx" "!FOUND_PATH!\BepInEx" ^
+        /E /COPYALL /R:0 /W:0 /NP ^
+        /LOG+:"!LOG_DIR!\restore.log" >nul
     if !errorlevel! GEQ 8 (
         call :Log "ERROR: Failed to restore BepInEx directory"
         call :ColorEcho RED "ERROR: Installation failed"
         type "!LOG_DIR!\restore.log" >> "!LOG_FILE!"
-        goto :RestoreBackup_End
     )
 
     :: Restore doorstop files if they exist in backup
@@ -1055,7 +1125,6 @@ exit /b 0
     call :ColorEcho GREEN "✓ Backup restored successfully"
     :RestoreBackup_End
     endlocal
-    exit /b 0
 
 :: =====================================================================
 :: FUNCTION: WriteVersionInfo
@@ -1073,9 +1142,9 @@ exit /b 0
     set "TEMP_CFG=!TEMP_DIR!\version_temp.cfg"
 
     :: Create config directory if it doesn't exist
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" "Failed to create BepInEx config directory" || (
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" || (
         endlocal
-        exit /b 6
+        call :HandleError 6 "" "FOUND_PATH"
     )
 
     :: Create or update version file with author-name combination
@@ -1083,10 +1152,7 @@ exit /b 0
         echo !MOD_AUTHOR!-!MOD_NAME!=!MOD_VERSION!> "!VERSION_FILE!"
         if !errorlevel! neq 0 (
             call :HandleError 8 "" "VERSION_FILE"
-            endlocal
-            exit /b 8
         )
-        exit /b 0
     )
 
     :: Create temporary file for version updates
@@ -1094,8 +1160,6 @@ exit /b 0
     type nul > "!TEMP_CFG!" 2>nul
     if !errorlevel! neq 0 (
         call :HandleError 1
-        endlocal
-        exit /b 1
     )
 
     set "FOUND=0"
@@ -1118,7 +1182,6 @@ exit /b 0
         if !errorlevel! neq 0 (
             call :HandleError 1
             if exist "!TEMP_CFG!" del /f /q "!TEMP_CFG!"
-            exit /b 1
         )
     )
 
@@ -1153,7 +1216,7 @@ exit /b 0
             "}" ^
             "Receive-Job $job" ^
         "} catch { " ^
-            "Write-Host $_.Exception.Message 2>&1 | Out-Null; " ^
+            "$_.Exception.Message | Out-File '!LOG_DIR!\download.log'; " ^
             "exit 1 " ^
         "}"
     
@@ -1196,8 +1259,6 @@ exit /b 0
     if not exist "!LOG_DIR!" (
         mkdir "!LOG_DIR!" 2>nul || (
             call :HandleError 3
-            endlocal
-            exit /b 3
         )
     )
     
@@ -1209,8 +1270,6 @@ exit /b 0
         if not exist "!OUTPUT_DIR!" (
             mkdir "!OUTPUT_DIR!" 2>nul || (
                 call :HandleError 3
-                endlocal
-                exit /b 3
             )
         )
     )
@@ -1239,24 +1298,22 @@ exit /b 0
             "'URL=' + $response.latest.download_url | Add-Content -Path '!OUTPUT_FILE!';" ^
         "} catch {" ^
             "$_.Exception.Message | Out-File '!API_LOG!';" ^
-            "exit $(if ($_.Exception.Message -match 'Invalid API') { 10 } else { 2 })" ^
+            "if ($_.Exception -is [System.Net.WebException]) { exit 2 } " ^
+            "elseif ($_.Exception -is [System.IO.IOException]) { exit 3 } " ^
+            "else { exit 2 }" ^
         "}"
 
     if !errorlevel! equ 2 (
         call :HandleError 2 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
-        endlocal
-        exit /b 2
-    ) else if !errorlevel! equ 10 (
-        call :HandleError 10 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
-        endlocal
-        exit /b 10
+    ) else if !errorlevel! equ 3 (
+        call :HandleError 3 "!API_LOG!" "MOD_AUTHOR MOD_NAME API_URL"
     )
 
     :: Validate output file exists and has content
     if not exist "!OUTPUT_FILE!" (
         call :HandleError 10
-        endlocal
-        exit /b 10
+        type "!API_LOG!" >> "!LOG_FILE!"
+        type "!TEMP_RESPONSE!" >> "!LOG_FILE!"
     )
 
     :: Verify required data is present
@@ -1264,15 +1321,11 @@ exit /b 0
         call :HandleError 10
         type "!API_LOG!" >> "!LOG_FILE!"
         type "!TEMP_RESPONSE!" >> "!LOG_FILE!"
-        endlocal
-        exit /b 10
     )
     findstr /B "URL=" "!OUTPUT_FILE!" >nul || (
         call :HandleError 10
         type "!API_LOG!" >> "!LOG_FILE!"
         type "!TEMP_RESPONSE!" >> "!LOG_FILE!"
-        endlocal
-        exit /b 10
     )
 
     :: Clean up temporary response file
@@ -1355,15 +1408,11 @@ exit /b 0
     :: Check for download errors
     if !errorlevel! neq 0 (
         call :HandleError 2 "!LOG_DIR!\!MOD_NAME!_download.log" "MOD_NAME URL OUTPUT"
-        endlocal
-        exit /b 2
     )
 
     :: Verify downloaded file exists and has content
     if not exist "!OUTPUT!" (
         call :HandleError 1
-        endlocal
-        exit /b 1
     )
     
     :: Zero-byte file check
@@ -1371,8 +1420,6 @@ exit /b 0
         if %%~zA LEQ 0 (
             call :HandleError 2
             del "!OUTPUT!" 2>nul
-            endlocal
-            exit /b 2
         )
     )
 
@@ -1394,7 +1441,7 @@ exit /b 0
 
     :: Use centralized API helper to get version info
     set "API_OUTPUT=%TEMP_DIR%\BepInExPack_api.txt"
-    call :CALL_THUNDERSTORE_API "BepInEx" "BepInExPack" "!API_OUTPUT!"
+    call :CALL_THUNDERSTORE_API "!BEPINEX_AUTHOR!" "!BEPINEX_NAME!" "!API_OUTPUT!"
     if !errorlevel! neq 0 (
         endlocal
         exit /b !errorlevel!
@@ -1419,8 +1466,6 @@ exit /b 0
 
     if !errorlevel! neq 0 (
         call :HandleError 2 "!LOG_DIR!\BepInExPack_download.log" "DOWNLOAD_URL"
-        endlocal
-        exit /b 2
     )
 
     :: Extract BepInExPack
@@ -1429,8 +1474,6 @@ exit /b 0
     call :ExtractFiles "!ZIP_FILE!" "!EXTRACT_ROOT!" "BepInExPack"
     if !errorlevel! neq 0 (
         call :HandleError 9 "!LOG_DIR!\BepInExPack_extract.log" "ZIP_FILE EXTRACT_ROOT"
-        endlocal
-        exit /b 9
     )
 
     :: Log the extracted contents for debugging
@@ -1442,28 +1485,37 @@ exit /b 0
     
     if not exist "!BEPINPACK_ROOT!\doorstop_config.ini" (
         call :HandleError 9 "" "BEPINPACK_ROOT"
-        endlocal
-        exit /b 9
     )
 
     if not exist "!BEPINPACK_ROOT!\winhttp.dll" (
         call :HandleError 9 "" "BEPINPACK_ROOT"
-        endlocal
-        exit /b 9
     )
 
     if not exist "!BEPINPACK_ROOT!\BepInEx" (
         call :HandleError 9 "" "BEPINPACK_ROOT"
-        endlocal
-        exit /b 9
     )
 
     :: Ensure target directories exist
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx" "Failed to create BepInEx directory"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\core" "Failed to create BepInEx core directory"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" "Failed to create BepInEx config directory"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins" "Failed to create BepInEx plugins directory"
-    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers" "Failed to create BepInEx patchers directory"
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx" || (
+        endlocal
+        call :HandleError 3 "" "FOUND_PATH"
+    )
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\core" || (
+        endlocal
+        call :HandleError 3 "" "FOUND_PATH"
+    )
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\config" || (
+        endlocal
+        call :HandleError 3 "" "FOUND_PATH"
+    )
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\plugins" || (
+        endlocal
+        call :HandleError 3 "" "FOUND_PATH"
+    )
+    call :CREATE_DIRECTORY "!FOUND_PATH!\BepInEx\patchers" || (
+        endlocal
+        call :HandleError 3 "" "FOUND_PATH"
+    )
 
     :: Copy root files (doorstop and winhttp)
     call :Log "Copying BepInEx root files..."
@@ -1471,21 +1523,20 @@ exit /b 0
     for %%F in (doorstop_config.ini winhttp.dll) do (
         copy /Y "!BEPINPACK_ROOT!\%%F" "!FOUND_PATH!\%%F" >nul || (
             call :HandleError 8 "" "FILE_NAME"
-            endlocal
-            exit /b 8
         )
     )
 
     :: Copy BepInEx folder contents
     call :Log "Copying BepInEx folder..."
     robocopy "!BEPINPACK_ROOT!\BepInEx" "!FOUND_PATH!\BepInEx" ^
-        /E /COPYALL /R:0 /W:0 /NP ^
+        /E /DCOPY:T /R:0 /W:0 /NP ^
         /LOG+:"!LOG_DIR!\BepInExPack_install.log" >nul
     if !errorlevel! GEQ 8 (
-        call :HandleError 8 ^
-            "!LOG_DIR!\BepInExPack_install.log"
-        endlocal
-        exit /b 8
+        :: Fallback to xcopy if robocopy fails
+        xcopy "!BEPINPACK_ROOT!\BepInEx\*" "!FOUND_PATH!\BepInEx\" /E /Y /Q >nul
+        if !errorlevel! neq 0 (
+            call :HandleError 8 "!LOG_DIR!\BepInExPack_install.log"
+        )
     )
 
     :: Verify critical files
@@ -1506,8 +1557,6 @@ exit /b 0
 
     if defined MISSING_FILES (
         call :HandleError 6 "" "MISSING_FILES"
-        endlocal
-        exit /b 6
     )
 
     call :Log "BepInExPack installation completed successfully"
@@ -1581,25 +1630,24 @@ exit /b 0
         "$webClient.Headers.Add('User-Agent', 'LCPlusInstaller/%VERSION%');" ^
         "try { " ^
             "$content = $webClient.DownloadString(" ^
-                "'https://raw.githubusercontent.com/PyroDonkey/Lethal-Company-Plus/refs/heads/main/Modlist/modlist.ini'" ^
+                "'%MODLIST_URL%'" ^
             "); " ^
             "[System.IO.File]::WriteAllText('%TEMP_DIR%\\modlist.ini', $content)" ^
         "} catch { " ^
-            "Write-Error $_.Exception.Message; " ^
-            "exit 1 " ^
+            "if ($_.Exception -is [System.Net.WebException]) { exit 2 } " ^
+            "elseif ($_.Exception -is [System.IO.IOException]) { exit 3 } " ^
+            "else { exit 2 } " ^
         "}; " ^
         2>"%LOG_DIR%\modlist_download.log"
 
-    if !errorlevel! neq 0 (
-        call :HandleError 2 "%LOG_DIR%\modlist_download.log"
-        endlocal
-        exit /b 2
+    if !errorlevel! equ 2 (
+        call :HandleError 2 "%LOG_DIR%\modlist_download.log" "MODLIST_URL TEMP_DIR"
+    ) else if !errorlevel! equ 3 (
+        call :HandleError 3 "%LOG_DIR%\modlist_download.log" "TEMP_DIR"
     )
 
     if not exist "%TEMP_DIR%\modlist.ini" (
         call :HandleError 3 "" "TEMP_DIR"
-        endlocal
-        exit /b 3
     )
 
     set "MOD_LIST="
@@ -1618,8 +1666,6 @@ exit /b 0
     )
     if not defined MOD_LIST (
         call :HandleError 14 "" "MOD_LIST"
-        endlocal
-        exit /b 14
     )
     if defined MOD_LIST set "MOD_LIST=!MOD_LIST:~0,-1!"
 
@@ -1662,9 +1708,8 @@ exit /b 0
     :: Ensure extraction directory exists
     if not exist "!DESTINATION_DIR!" (
         mkdir "!DESTINATION_DIR!" 2>nul || (
-            call :HandleError 3 "" "DESTINATION_DIR"
             endlocal
-            exit /b 3
+            call :HandleError 3 "" "DESTINATION_DIR"
         )
     )
 
@@ -1681,8 +1726,6 @@ exit /b 0
 
     if !errorlevel! neq 0 (
         call :HandleError 9 "" "ZIP_FILE DESTINATION_DIR"
-        endlocal
-        exit /b 9
     )
 
     endlocal

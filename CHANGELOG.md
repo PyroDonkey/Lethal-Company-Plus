@@ -1,3 +1,23 @@
+## v1.10.0 (2025-02-23)
+
+*   **Major Improvements:**
+    *   **Code Reorganization:** Created `InitializeConfig` function to centralize all configuration variables, making the script cleaner and easier to maintain.
+    *   **Improved Error Handling:** Created `DefineErrorCodes` for better error message management.  Error handling now consistently uses error codes.
+    *   **Refactoring:** Moved initialization logic to `InitializeConfig` and simplified `CONTINUE_INITIALIZATION`.
+    *   **Steam AppID Game Location:**  Added logic to locate the game using the Steam AppID, improving automatic detection reliability.
+    *  **Modlist Processing:** Fixes and updates to downloading, validating, and processing the `modlist.ini` file.
+
+## v1.9.0 (2025-02-22)
+
+*   **Major Improvements:**
+    *   **Refactored Code:** Improved script structure, modularity, and readability by moving initializations into functions and consolidating code.
+    *   **Enhanced Error Handling:** Implemented comprehensive error handling throughout the script, including detailed error messages, logging, and fallback mechanisms.
+    *   **Improved Mod Installation:** Added checks for successful downloads, extractions, and file copying. Includes robust handling of patcher files.
+    *   **Network Timeouts:** Added a 30-second timeout to download operations to prevent hangs.
+    *   **BepInEx Installation:** Improved reliability of BepInExPack installation with better validation.
+    *   **Modlist Processing:** Fixes and updates to downloading, validating, and processing the `modlist.ini` file.
+    *   **Backup/Restore:** Improved handling of creating and removing backups.
+
 ## v1.8.0 (2025-02-17)
 
 ### Features
